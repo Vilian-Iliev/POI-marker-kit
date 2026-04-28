@@ -22,11 +22,12 @@ None — this file is loaded by vitest via
   path (signature verification + expiry check).
 - Same pattern as RecorderApp's integration tests
   (`GpsPlusSlamJs_RecorderApp/src/state/recording-replay.integration.test.ts`).
-- `config/vitest.config.ts` aliases `gps-plus-slam-js` → source for fast
-  iteration (no rebuild needed). The alias is **not** load-bearing for
-  activation — `validateLicenseKey()` activates whichever module instance is
-  resolved at runtime, by definition. Activation works equally well against
-  `dist/` if the alias is dropped.
+- `gps-plus-slam-js` is resolved from `node_modules` — either the published
+  npm package, or a local symlink injected by the repo-root `.pnpmfile.cjs`
+  when the maintainer sets `LOCAL_CORE`. Activation is by definition
+  module-instance-scoped: `validateLicenseKey()` activates whichever
+  instance is resolved at runtime, so this works equally well against
+  `dist/` and against the local-source symlink.
 - `COMMUNITY_LICENSE_KEY` carries a rolling 12-month expiration and is
   renewed each release. If framework tests start failing with
   `license expired`, regenerate via the key-rotation tooling shipped with

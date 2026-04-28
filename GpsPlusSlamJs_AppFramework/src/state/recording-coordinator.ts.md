@@ -27,7 +27,7 @@ Returns the cached device orientation.
 
 #### `eulerToQuaternion(alpha, beta, gamma): Quaternion`
 
-Re-exported from the core library (`gps-plus-slam`). Converts DeviceOrientationEvent Euler angles to a quaternion.
+Re-exported from the core library (`gps-plus-slam-js`). Converts DeviceOrientationEvent Euler angles to a quaternion.
 
 - **Input:**
   - `alpha` - Compass heading in degrees (rotation around Z axis, 0-360°)
