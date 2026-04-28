@@ -20,3 +20,4 @@ Closes #
 - [ ] Sidecar docs (`*.md`) updated if behavior changed
 - [ ] All tests pass locally (`pnpm test` in both packages)
 - [ ] Commit message follows [conventional commits](https://www.conventionalcommits.org/) format
+- [ ] I have read and agreed to the [Contributor License Agreement](../CLA.md) (a bot will prompt me to sign on this PR if I have not already)

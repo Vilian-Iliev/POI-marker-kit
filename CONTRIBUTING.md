@@ -132,7 +132,15 @@ The **core library** (`gps-plus-slam-js`) is closed-source and installed from np
 
 ## Contributor License Agreement (CLA)
 
-By submitting a pull request, you agree to the [Contributor License Agreement](https://cla-assistant.io/cs-util-com/location-based-webxr). The CLA bot will comment on your first PR with instructions.
+By submitting a pull request, you agree to the terms of the [Contributor License Agreement](CLA.md).
+
+On your first PR, a bot will automatically comment with instructions. To sign, post the following sentence on its own line as a PR comment:
+
+> I have read the CLA Document and I hereby sign the CLA
+
+Your signature is recorded in `signatures/version1/cla.json` on the `cla-signatures` branch and applies to all of your future contributions until the CLA version changes. PRs without a signed CLA cannot be merged.
+
+If you are contributing on behalf of an employer or other legal entity, see [CLA §8 — Corporate Contributors](CLA.md#8-corporate-contributors).
 
 ## Getting Help
 
