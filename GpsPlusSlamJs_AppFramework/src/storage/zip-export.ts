@@ -254,6 +254,21 @@ export async function exportSessionAsZip(
           `ZipExportContributor relative path must not start with '/' (got ${relativePath})`
         );
       }
+      // Defensive: reject backslashes (Windows-style separators) and any path
+      // traversal segments. Without this, a contributor could escape its
+      // declared subdir (e.g. `../actions/000001.json`) and overwrite
+      // framework-owned files inside the ZIP.
+      if (relativePath.includes('\\')) {
+        throw new Error(
+          `ZipExportContributor relative path must not contain '\\' (got ${relativePath})`
+        );
+      }
+      const segments = relativePath.split('/');
+      if (segments.some((s) => s === '..' || s === '.')) {
+        throw new Error(
+          `ZipExportContributor relative path must not contain '.' or '..' segments (got ${relativePath})`
+        );
+      }
       await zipWriter.add(`${subdir}/${relativePath}`, new BlobReader(blob));
     };
     fileCount += await contributor.contribute(addFile);

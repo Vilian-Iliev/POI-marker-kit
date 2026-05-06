@@ -180,6 +180,34 @@ describe('zip-export — ZipExportContributor seam', () => {
       })
     ).rejects.toThrow(/must not start with/);
   });
+
+  it('rejects a contributor that tries to escape its subdir via traversal segments', async () => {
+    // Why: without this check a contributor could write
+    // `../actions/000001.json` and overwrite framework-owned files inside
+    // the ZIP. The framework prepends the subdir but does not normalize the
+    // resulting path, so `..` segments must be rejected at the seam.
+    const sessionName = await makeFlatSession();
+    const makeContributor = (badPath: string): ZipExportContributor => ({
+      subdir: 'extras',
+      async contribute(addFile) {
+        await addFile(badPath, new Blob(['{}']));
+        return 1;
+      },
+    });
+
+    for (const badPath of [
+      '../escape.json',
+      'a/../../escape.json',
+      './escape.json',
+      'sub\\escape.json',
+    ]) {
+      await expect(
+        exportSessionAsZip(sessionName, undefined, {
+          contributors: [makeContributor(badPath)],
+        })
+      ).rejects.toThrow(/must not contain/);
+    }
+  });
 });
 
 describe('zip-reader — loadEntriesFromSubdir', () => {
