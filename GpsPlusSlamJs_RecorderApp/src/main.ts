@@ -360,6 +360,10 @@ export async function handleClearRefPointCache(): Promise<void> {
         await folderManager.loadAndDisplayRefPoints(currentHandle);
       } catch (err) {
         log.warn('Re-import after cache clear failed:', err);
+        // Re-import failed — clear in-memory imported ref points so proximity
+        // checks don't keep referring to stale entries from before the cache
+        // was cleared.
+        refPointHandlers.setImportedRefPoints([]);
       }
     } else {
       // No active scenario — clear in-memory imported ref points so any
