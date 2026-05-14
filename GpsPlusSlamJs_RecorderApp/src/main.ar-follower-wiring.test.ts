@@ -277,6 +277,7 @@ vi.mock('gps-plus-slam-app-framework/sensors/permission-checker', () => ({
     orientation: { granted: false, supported: true },
     fileSystem: { granted: false, supported: true },
   }),
+  subscribePermissionChanges: vi.fn().mockReturnValue({ unsubscribe: vi.fn() }),
 }));
 vi.mock('gps-plus-slam-app-framework/visualization/reference-points', () => ({
   refPointVisualizer: {},

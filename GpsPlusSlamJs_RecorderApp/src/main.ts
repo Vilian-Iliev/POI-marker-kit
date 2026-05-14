@@ -115,6 +115,7 @@ import {
 import {
   checkAllPermissions,
   requestAllPermissions,
+  subscribePermissionChanges,
 } from 'gps-plus-slam-app-framework/sensors/permission-checker';
 
 import type { LatLong } from 'gps-plus-slam-app-framework/core';
@@ -681,6 +682,17 @@ async function main(): Promise<void> {
   // This provides immediate feedback on what's available/needed
   const initialPermissions = await checkAllPermissions();
   updatePermissionStatus(initialPermissions);
+
+  // Subscribe to out-of-band permission changes so a user flipping
+  // location/camera in browser settings is reflected in the setup modal
+  // without requiring a page reload. See
+  // docs/2026-05-03-setup-screen-defaults-and-permission-rerequest.md (Issue 2).
+  subscribePermissionChanges((result) => {
+    updatePermissionStatus(result);
+    if (result.allMandatoryReady) {
+      updateStatus('Ready - Configure scenario');
+    }
+  });
 
   // Update status based on permission state
   if (!initialPermissions.webxr.supported) {

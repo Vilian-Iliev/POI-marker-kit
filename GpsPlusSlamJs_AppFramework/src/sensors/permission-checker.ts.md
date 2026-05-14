@@ -35,6 +35,7 @@ The module now includes:
 | `checkAllPermissions`             | `() => Promise<PermissionCheckResult>`              | Check all permissions without prompts             |
 | `requestAllPermissions`           | `() => Promise<PermissionCheckResult>`              | Request all pending permissions incl. depth probe |
 | `requestWebXRWithDepthPermission` | `() => Promise<PermissionStatus>`                   | Start probe XR session to trigger depth prompt    |
+| `subscribePermissionChanges`      | `(cb: (r: PermissionCheckResult) => void) => PermissionSubscription` | Re-run `checkAllPermissions` on Permissions API `change`, page visibility, and window focus events |
 
 ## Invariants & Assumptions
 

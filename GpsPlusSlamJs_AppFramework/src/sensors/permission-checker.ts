@@ -467,6 +467,146 @@ export async function checkAllPermissions(): Promise<PermissionCheckResult> {
 }
 
 /**
+ * Subscription handle returned by {@link subscribePermissionChanges}.
+ * Calling `unsubscribe()` detaches every listener wired by the subscription.
+ */
+export interface PermissionSubscription {
+  unsubscribe(): void;
+}
+
+/**
+ * Subscribe to out-of-band permission changes.
+ *
+ * Today the recorder app only re-runs `checkAllPermissions()` at startup
+ * and after the user clicks "Grant Permissions" — so a permission flipped
+ * via browser settings (e.g. user denies location, then enables it under
+ * "site settings") is only detected after a full page reload.
+ *
+ * This subscription wires three signals:
+ * 1. `navigator.permissions.query(...)` returns a live `PermissionStatus`
+ *    for `'geolocation'` and `'camera'`; we keep those references and
+ *    attach `onchange` so we react immediately when the browser updates
+ *    the underlying state.
+ * 2. `document.visibilitychange` (only when `visibilityState === 'visible'`)
+ *    covers the "user tabbed out to settings, toggled, tabbed back" case
+ *    on browsers where `onchange` does not fire reliably.
+ * 3. `window.focus` covers the same scenario for browsers/standalone
+ *    windows where `visibilitychange` is not dispatched on focus return.
+ *
+ * Each signal triggers a fresh {@link checkAllPermissions} call; the
+ * resulting {@link PermissionCheckResult} is passed to `callback`.
+ *
+ * No periodic polling is performed — the trio above is the complete
+ * fallback chain. If a browser supports none of these signals for a given
+ * permission, the user can still re-check by clicking the (now permanently
+ * visible) "Grant Permissions" button.
+ *
+ * @param callback - Invoked with the latest {@link PermissionCheckResult}
+ *   each time one of the signals fires. The initial state is **not**
+ *   delivered; callers are expected to have already rendered it.
+ * @returns A handle whose `unsubscribe()` removes every wired listener.
+ */
+export function subscribePermissionChanges(
+  callback: (result: PermissionCheckResult) => void
+): PermissionSubscription {
+  let disposed = false;
+  const cleanups: Array<() => void> = [];
+
+  const notify = (): void => {
+    if (disposed) return;
+    checkAllPermissions()
+      .then((result) => {
+        if (!disposed) callback(result);
+      })
+      .catch((err) => {
+        log.warn('subscribePermissionChanges: re-check failed', err);
+      });
+  };
+
+  // Signal 1: PermissionStatus.onchange for geolocation + camera.
+  // navigator.permissions is unavailable on some browsers (Safari < 16
+  // for camera, etc.); we tolerate failures silently and fall back to
+  // signals 2 + 3.
+  if (
+    typeof navigator !== 'undefined' &&
+    navigator.permissions &&
+    typeof navigator.permissions.query === 'function'
+  ) {
+    const wireStatus = (name: 'geolocation' | 'camera'): void => {
+      try {
+        const p = navigator.permissions.query({
+          name,
+        } as unknown as PermissionDescriptor);
+        if (!p || typeof p.then !== 'function') return;
+        p.then(
+          (status) => {
+            if (disposed) return;
+            const handler = (): void => notify();
+            try {
+              status.addEventListener('change', handler);
+              cleanups.push(() =>
+                status.removeEventListener('change', handler)
+              );
+            } catch {
+              // Fall back to the legacy onchange property if
+              // addEventListener is unavailable.
+              const prev = status.onchange;
+              status.onchange = (ev: Event): unknown => {
+                handler();
+                return prev?.call(status, ev);
+              };
+              cleanups.push(() => {
+                status.onchange = prev;
+              });
+            }
+          },
+          () => {
+            /* permissions.query rejected — ignore, fallbacks remain wired */
+          }
+        );
+      } catch {
+        // Some browsers throw synchronously for unsupported names.
+      }
+    };
+    wireStatus('geolocation');
+    wireStatus('camera');
+  }
+
+  // Signal 2: visibilitychange — only re-check when the tab becomes
+  // visible. The "hidden" transition tells us nothing useful.
+  if (typeof document !== 'undefined') {
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') notify();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    cleanups.push(() =>
+      document.removeEventListener('visibilitychange', onVisibility)
+    );
+  }
+
+  // Signal 3: window.focus — covers browsers where visibilitychange does
+  // not fire on tab refocus (some embedded webviews).
+  if (typeof window !== 'undefined') {
+    const onFocus = (): void => notify();
+    window.addEventListener('focus', onFocus);
+    cleanups.push(() => window.removeEventListener('focus', onFocus));
+  }
+
+  return {
+    unsubscribe(): void {
+      disposed = true;
+      for (const c of cleanups.splice(0)) {
+        try {
+          c();
+        } catch (err) {
+          log.warn('subscribePermissionChanges: cleanup failed', err);
+        }
+      }
+    },
+  };
+}
+
+/**
  * Request all mandatory permissions that haven't been granted yet.
  * Shows browser prompts for each permission that needs requesting.
  *

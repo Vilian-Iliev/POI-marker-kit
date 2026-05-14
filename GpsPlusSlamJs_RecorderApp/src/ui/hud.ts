@@ -765,14 +765,25 @@ export function updatePermissionStatus(result: PermissionCheckResult): void {
     result.orientation.error
   );
 
-  // Show/hide "Grant Permissions" button based on whether any permissions need requesting
+  // Show/hide "Grant Permissions" button based on whether any permissions
+  // need requesting OR have been denied. The button must stay visible until
+  // every mandatory permission reports granted === true so the user can
+  // re-decide after flipping a permission in browser settings. See
+  // docs/2026-05-03-setup-screen-defaults-and-permission-rerequest.md (Issue 2).
   const btnRequestPermissions = document.getElementById(
     'btn-request-permissions'
   );
-  const needsRequest =
-    (result.geolocation.supported && result.geolocation.granted === null) ||
-    (result.camera.supported && result.camera.granted === null) ||
-    (result.orientation.supported && result.orientation.granted === null);
+  const missingMandatory: string[] = [];
+  if (result.geolocation.supported && result.geolocation.granted !== true) {
+    missingMandatory.push('Location');
+  }
+  if (result.camera.supported && result.camera.granted !== true) {
+    missingMandatory.push('Camera');
+  }
+  if (result.orientation.supported && result.orientation.granted !== true) {
+    missingMandatory.push('Compass');
+  }
+  const needsRequest = missingMandatory.length > 0;
 
   if (btnRequestPermissions) {
     if (needsRequest) {
@@ -806,6 +817,14 @@ export function updatePermissionStatus(result: PermissionCheckResult): void {
     if (denied.length > 0) {
       errors.push(
         `${listFormatter.format(denied)} access denied. Please enable in browser settings.`
+      );
+    } else if (needsRequest) {
+      // Nothing explicitly denied yet, but mandatory permissions are still
+      // pending. Surface a generic red explanation next to the visible
+      // "Grant Permissions" button so the button's purpose is obvious
+      // without changing its label.
+      errors.push(
+        `${listFormatter.format(missingMandatory)} access is mandatory for AR recording.`
       );
     }
 

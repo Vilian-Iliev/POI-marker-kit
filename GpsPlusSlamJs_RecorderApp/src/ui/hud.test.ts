@@ -25,8 +25,10 @@ import {
   updateSaveStatus,
   updateRefPointButtonLabel,
   setNewRefPointButtonVisible,
+  updatePermissionStatus,
   type UICallbacks,
 } from './hud.js';
+import type { PermissionCheckResult } from 'gps-plus-slam-app-framework/sensors/permission-checker';
 
 /**
  * Creates a minimal DOM structure for testing.
@@ -2208,3 +2210,167 @@ describe('setNewRefPointButtonVisible', () => {
     expect(cbs.onMarkNewRefPoint).toHaveBeenCalledOnce();
   });
 });
+
+/**
+ * Tests for updatePermissionStatus — the "Grant Permissions" button must
+ * stay visible (and show explanatory red text) until every mandatory
+ * permission reports granted === true, including when a permission is
+ * denied. See docs/2026-05-03-setup-screen-defaults-and-permission-rerequest.md
+ * (Issue 2) for the full design.
+ */
+describe('updatePermissionStatus — Grant Permissions button visibility', () => {
+  function setupPermissionDOM(): void {
+    document.body.innerHTML = `
+      <button id="btn-enter-ar" disabled></button>
+      <select id="scenario-select"></select>
+      <button id="btn-start"></button>
+      <button id="btn-stop" class="hidden"></button>
+      <button id="btn-ref-point" class="hidden"></button>
+      <button id="btn-new-ref-point" class="hidden"></button>
+      <button id="btn-map"></button>
+      <button id="btn-open-folder"></button>
+      <button id="btn-choose-save"></button>
+      <div id="setup-modal"></div>
+      <div id="new-scenario-section" class="hidden"></div>
+      <input id="new-scenario-name" type="text" />
+      <span id="status-text"></span>
+      <div id="gps-info" class="hidden"><span id="gps-accuracy"></span></div>
+      <div id="ar-info" class="hidden"><span id="ar-tracking"></span></div>
+      <div id="frame-count-info" class="hidden"><span id="frame-count">0</span></div>
+      <textarea id="session-notes" disabled></textarea>
+      <div id="recording-indicator" class="hidden"></div>
+      <p id="enter-ar-hint"></p>
+      <span id="perm-filestorage-status"></span>
+      <span id="perm-webxr-status"></span>
+      <span id="perm-gps-status"></span>
+      <span id="perm-camera-status"></span>
+      <span id="perm-orientation-status"></span>
+      <button id="btn-request-permissions" class="hidden">Grant Permissions</button>
+      <p id="permission-error" class="hidden"></p>
+    `;
+  }
+
+  function makeResult(
+    overrides: Partial<{
+      geolocation: boolean | null;
+      camera: boolean | null;
+      orientation: boolean | null;
+    }> = {}
+  ): PermissionCheckResult {
+    // Use `in` checks so explicit `null` overrides aren't coerced by `??`.
+    const geo = 'geolocation' in overrides ? overrides.geolocation! : true;
+    const cam = 'camera' in overrides ? overrides.camera! : true;
+    const ori = 'orientation' in overrides ? overrides.orientation! : true;
+    return {
+      webxr: { supported: true, granted: true },
+      geolocation: {
+        supported: true,
+        granted: geo,
+        error: geo === false ? 'Location access denied.' : undefined,
+      },
+      camera: {
+        supported: true,
+        granted: cam,
+        error: cam === false ? 'Camera access denied.' : undefined,
+      },
+      orientation: { supported: true, granted: ori },
+      fileSystem: { supported: true, granted: true },
+      allMandatoryReady: geo === true && cam === true,
+    };
+  }
+
+  // Why: When a permission flips to denied, the user must still have an
+  // in-app way to re-trigger the request after flipping the setting back in
+  // the browser. The old logic (granted === null) hid the button on denial.
+  it('keeps button visible when geolocation is denied (granted === false)', () => {
+    setupPermissionDOM();
+    initUI(createMockCallbacks());
+
+    updatePermissionStatus(makeResult({ geolocation: false }));
+
+    const btn = document.getElementById('btn-request-permissions')!;
+    expect(btn.classList.contains('hidden')).toBe(false);
+  });
+
+  // Why: Same rule applied symmetrically — camera-denied must not hide the
+  // button either, otherwise the user gets stuck in a dead-end.
+  it('keeps button visible when camera is denied', () => {
+    setupPermissionDOM();
+    initUI(createMockCallbacks());
+
+    updatePermissionStatus(makeResult({ camera: false }));
+
+    const btn = document.getElementById('btn-request-permissions')!;
+    expect(btn.classList.contains('hidden')).toBe(false);
+  });
+
+  // Why: When everything is granted the button has nothing to do and must
+  // disappear — the original visibility contract for the happy path.
+  it('hides button once all mandatory permissions are granted', () => {
+    setupPermissionDOM();
+    initUI(createMockCallbacks());
+
+    updatePermissionStatus(makeResult());
+
+    const btn = document.getElementById('btn-request-permissions')!;
+    expect(btn.classList.contains('hidden')).toBe(true);
+  });
+
+  // Why: The button must also be visible in the initial "never asked"
+  // (granted === null) state — this regression-proofs the existing behavior
+  // while broadening the rule.
+  it('keeps button visible when permissions are still pending (null)', () => {
+    setupPermissionDOM();
+    initUI(createMockCallbacks());
+
+    updatePermissionStatus(makeResult({ geolocation: null }));
+
+    const btn = document.getElementById('btn-request-permissions')!;
+    expect(btn.classList.contains('hidden')).toBe(false);
+  });
+
+  // Why: When the button is visible because permissions are still pending
+  // (not yet denied), the user should see an explanatory red message that
+  // permissions are mandatory — per the design decision to keep the button
+  // label generic and surface the reason in #permission-error instead.
+  it('shows mandatory-permissions red text while permissions are pending', () => {
+    setupPermissionDOM();
+    initUI(createMockCallbacks());
+
+    updatePermissionStatus(makeResult({ geolocation: null, camera: null }));
+
+    const err = document.getElementById('permission-error')!;
+    expect(err.classList.contains('hidden')).toBe(false);
+    expect(err.textContent).toMatch(/mandatory/i);
+    expect(err.textContent).toMatch(/Location/);
+    expect(err.textContent).toMatch(/Camera/);
+  });
+
+  // Why: When a permission is explicitly denied, the existing specific
+  // "access denied" message must take precedence over the generic mandatory
+  // hint so the user gets actionable guidance.
+  it('shows specific denied message (not mandatory hint) when denied', () => {
+    setupPermissionDOM();
+    initUI(createMockCallbacks());
+
+    updatePermissionStatus(makeResult({ geolocation: false }));
+
+    const err = document.getElementById('permission-error')!;
+    expect(err.classList.contains('hidden')).toBe(false);
+    expect(err.textContent).toMatch(/access denied/i);
+    expect(err.textContent).not.toMatch(/mandatory/i);
+  });
+
+  // Why: Once everything is granted there is no error to show — the line
+  // must collapse so the setup modal looks clean.
+  it('hides permission-error when everything is granted', () => {
+    setupPermissionDOM();
+    initUI(createMockCallbacks());
+
+    updatePermissionStatus(makeResult());
+
+    const err = document.getElementById('permission-error')!;
+    expect(err.classList.contains('hidden')).toBe(true);
+  });
+});
+
