@@ -5,9 +5,9 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/node/v/gps-plus-slam-app-framework.svg)](https://nodejs.org/)
 
-Reusable building blocks for AR+GPS web apps built on top of the closed-source [gps-plus-slam-js](https://www.npmjs.com/package/gps-plus-slam-js) alignment core.
+Reusable building blocks for AR+GPS web apps, built on top of the closed-source [gps-plus-slam-js](https://www.npmjs.com/package/gps-plus-slam-js) alignment core.
 
-This package gives you the four big concrete capabilities every location-based AR app needs, so your code can stay focused on UI and product logic:
+It is part toolkit, part fusion engine: the toolkit covers the AR + GPS plumbing every app needs anyway, and the fusion engine lifts location accuracy to the point where ideas that previously sat on the "someday, on native" shelf become reachable in a browser:
 
 - A **WebXR + Three.js scene** with image and depth capture, replay rendering, and tracking-state monitoring.
 - **GPS, orientation, and permission wiring** ready to plug into the store.
@@ -16,11 +16,11 @@ This package gives you the four big concrete capabilities every location-based A
 
 ## Why use GPS+SLAM? (Visual Stability Beyond Raw GPS)
 
-Raw GPS is useful for getting near a place, but it still jitters by meters and altitude is usually the hardest channel to trust. Many location-based AR apps hide that with broad proximity zones, floating beacons, or oversized highlights.
+Raw GPS is useful for getting near a place, but it still jitters by meters and altitude is usually the hardest channel to trust. Most location-based AR apps work around that with broad proximity zones, floating beacons, or oversized highlights — fine as a fallback, but limiting if you want content that sits exactly on a path, a wall, or a specific spot on the ground.
 
-This framework lets you build a more spatially specific experience. It combines GPS observations with AR odometry so user movement produces a stable local alignment, then gives you placement helpers for objects that should stay tied to real-world coordinates:
+GPS+SLAM fuses GPS observations with the device's AR odometry, so as the user moves the alignment between the AR world and real-world coordinates gets more stable. On top of that, the framework gives you placement helpers for objects that should stay tied to a real location:
 
-- **Alignment improves with motion:** After roughly 15+ seconds of walking in representative outdoor conditions, the solver has enough baseline to make visible drift much smaller than raw GPS alone. Systematic investigation tests and manual QA have validated that this can be visually stable in real use, while still depending on device, environment, and recording quality.
+- **Alignment improves with motion:** Once the user has walked for roughly 15 seconds in representative outdoor conditions, the solver has enough baseline that visible drift drops well below raw GPS. How stable it actually feels still depends on the device, the environment, and how clean the GPS track is — but in our own outdoor tests it consistently held up well enough for content that needs to sit on a specific spot.
 - **VPS-like benefits without a VPS dependency:** Cloud visual-positioning systems can work well, but they usually require network access and a provider-maintained scan of the place where the user stands. GPS+SLAM localizes from the device's own GPS, camera tracking, motion, and orientation sensors, so the same alignment approach works in rural areas, woods, mountains, and private sites that no VPS provider has pre-scanned.
 - **Just a URL, no app install:** The whole experience runs in the mobile browser through WebXR, so end users open a link and are in AR within seconds. There is no app-store gate, no native build per platform, and authors can iterate on the live URL while users keep using the same link.
 - **Heading does not depend only on the compass:** Phone compass data can be noisy, biased, or temporarily wrong enough to make a naive AR overlay rotate in the wrong direction. GPS+SLAM can infer the world heading from how the user actually moves through space, so after the user has walked a few meters the overlay no longer has to trust the device-orientation readings.
