@@ -7,8 +7,9 @@ import { waitForTestHooksSubset } from './test-helpers.js';
  * Why this test matters: the accuracy-aware raw-GPS marker introduced in §3
  * scales a unit sphere by `(latLongAccuracy, altitudeAccuracy, latLongAccuracy)`.
  * The visual diagnostic only works if the rendered ellipsoid is **noticeably
- * larger** for a high-accuracy-uncertainty event than for a low-uncertainty
- * one. Unit tests already cover `mesh.scale` directly; this Playwright spec
+ * larger** for a low-accuracy event (large reported uncertainty in metres)
+ * than for a high-accuracy one (small reported uncertainty). Unit tests
+ * already cover `mesh.scale` directly; this Playwright spec
  * adds the end-to-end invariant: a real Three.js scene running in a real
  * browser reports the expected `THREE.Box3.setFromObject` ratio.
  *
@@ -50,11 +51,12 @@ test.describe('GPS accuracy ellipsoid (§3c)', () => {
     expect(hooks.hasSizes).toBe(true);
   });
 
-  test('high latLongAccuracy event produces markedly larger bbox than low-accuracy event', async ({
+  test('low-accuracy event (large latLongAccuracy in metres) produces markedly larger bbox than high-accuracy event', async ({
     page,
   }) => {
-    // Add a tight (≈ 5 m) event followed by a sloppy (≈ 40 m) event at the
-    // same world position so positions do not bias the bbox — only scale.
+    // Add a tight high-accuracy (≈ 5 m) event followed by a sloppy
+    // low-accuracy (≈ 40 m) event at the same world position so positions
+    // do not bias the bbox — only the accuracy-driven scale does.
     await page.evaluate(() => {
       window.testHooks.addGpsEventForTest([0, 0, 0], [0, 0, 0], {
         horizontal: 5,
@@ -72,15 +74,16 @@ test.describe('GPS accuracy ellipsoid (§3c)', () => {
 
     expect(sizes).toHaveLength(2);
 
-    // First event: diameter ≈ 2 × 1 × 5 = 10 m on each axis.
-    // Second event: ≈ 80 m. Allow tolerance for sphere tessellation.
+    // First event (high accuracy, 5 m): diameter ≈ 2 × 5 = 10 m per axis.
+    // Second event (low accuracy, 40 m): diameter ≈ 80 m per axis. Allow
+    // tolerance for sphere tessellation.
     expect(sizes[0].x).toBeGreaterThan(8);
     expect(sizes[0].x).toBeLessThan(12);
     expect(sizes[1].x).toBeGreaterThan(70);
     expect(sizes[1].x).toBeLessThan(90);
 
-    // The ratio is the actual user-visible invariant: a 40 m event must
-    // dominate a 5 m event by ≈ 8× in every axis.
+    // The ratio is the actual user-visible invariant: a low-accuracy 40 m
+    // event must dominate a high-accuracy 5 m event by ≈ 8× in every axis.
     const ratioX = sizes[1].x / sizes[0].x;
     const ratioY = sizes[1].y / sizes[0].y;
     const ratioZ = sizes[1].z / sizes[0].z;

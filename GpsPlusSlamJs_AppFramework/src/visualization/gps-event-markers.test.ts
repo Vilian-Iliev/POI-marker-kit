@@ -524,7 +524,7 @@ describe('GpsEventVisualizer', () => {
       expect(visualizer.getRawMarkerWorldSizes()).toEqual([]);
     });
 
-    it('returns markedly larger bbox for a high-accuracy event vs a low-accuracy event', () => {
+    it('returns markedly larger bbox for a low-accuracy event (large reported uncertainty) than for a high-accuracy event', () => {
       visualizer.setZeroRef({ lat: 48.8566, lon: 2.3522 });
 
       // Same position so positions don't dominate the bbox — only scale differs.
@@ -540,8 +540,9 @@ describe('GpsEventVisualizer', () => {
       const sizes = visualizer.getRawMarkerWorldSizes();
       expect(sizes).toHaveLength(2);
       // Sphere diameter = 2 × radius (= 1) × scale.
-      // Event 1: ~10m on each axis. Event 2: ~80m. Allow tolerance for the
-      // sphere-tessellation approximation in Box3.setFromObject.
+      // Event 1 (high accuracy, 5 m uncertainty): ~10m on each axis.
+      // Event 2 (low accuracy, 40 m uncertainty): ~80m. Allow tolerance for
+      // the sphere-tessellation approximation in Box3.setFromObject.
       expect(sizes[0].x).toBeGreaterThan(8);
       expect(sizes[0].x).toBeLessThan(12);
       expect(sizes[1].x).toBeGreaterThan(70);
