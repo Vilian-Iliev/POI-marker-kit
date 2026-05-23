@@ -41,6 +41,7 @@ function makeState(
     arElements: {} as CombinedRootState['arElements'],
     recording: {} as CombinedRootState['recording'],
     tracking: {} as CombinedRootState['tracking'],
+    trackingQuality: {} as CombinedRootState['trackingQuality'],
   };
 }
 

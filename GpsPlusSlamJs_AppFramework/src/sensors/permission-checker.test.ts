@@ -853,7 +853,9 @@ describe('permission-checker', () => {
       await new Promise((r) => setTimeout(r, 0));
 
       expect(callback).toHaveBeenCalled();
-      const lastResult = callback.mock.calls.at(-1)![0] as PermissionCheckResult;
+      const lastResult = callback.mock.calls.at(
+        -1
+      )![0] as PermissionCheckResult;
       expect(lastResult.geolocation.granted).toBe(true);
 
       sub.unsubscribe();
@@ -899,7 +901,9 @@ describe('permission-checker', () => {
       await new Promise((r) => setTimeout(r, 0));
 
       expect(callback).toHaveBeenCalled();
-      const lastResult = callback.mock.calls.at(-1)![0] as PermissionCheckResult;
+      const lastResult = callback.mock.calls.at(
+        -1
+      )![0] as PermissionCheckResult;
       expect(lastResult.geolocation.granted).toBe(true);
 
       sub.unsubscribe();

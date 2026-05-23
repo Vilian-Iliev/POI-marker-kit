@@ -195,8 +195,8 @@ function median(values: readonly number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0
-    ? (sorted[mid - 1] + sorted[mid]) / 2
-    : sorted[mid];
+    ? (sorted[mid - 1]! + sorted[mid]!) / 2
+    : sorted[mid]!;
 }
 
 /**
@@ -268,8 +268,8 @@ export function computeConvergence(
   let pairCount = 0;
   for (let i = 1; i < snapshots.length; i++) {
     const { rotationDeltaDeg, translationDeltaM } = matrixDelta(
-      snapshots[i - 1].matrix,
-      snapshots[i].matrix
+      snapshots[i - 1]!.matrix,
+      snapshots[i]!.matrix
     );
     if (rotationDeltaDeg > maxRotDeg) maxRotDeg = rotationDeltaDeg;
     if (translationDeltaM > maxTransM) maxTransM = translationDeltaM;
@@ -310,40 +310,10 @@ export function matrixDelta(
     return { rotationDeltaDeg: 0, translationDeltaM: 0 };
   }
   const prevMat = mat4.fromValues(
-    prev[0],
-    prev[1],
-    prev[2],
-    prev[3],
-    prev[4],
-    prev[5],
-    prev[6],
-    prev[7],
-    prev[8],
-    prev[9],
-    prev[10],
-    prev[11],
-    prev[12],
-    prev[13],
-    prev[14],
-    prev[15]
+    ...(prev as unknown as Parameters<typeof mat4.fromValues>)
   );
   const currMat = mat4.fromValues(
-    curr[0],
-    curr[1],
-    curr[2],
-    curr[3],
-    curr[4],
-    curr[5],
-    curr[6],
-    curr[7],
-    curr[8],
-    curr[9],
-    curr[10],
-    curr[11],
-    curr[12],
-    curr[13],
-    curr[14],
-    curr[15]
+    ...(curr as unknown as Parameters<typeof mat4.fromValues>)
   );
   const prevQuat = quat.create();
   const currQuat = quat.create();
@@ -417,8 +387,8 @@ export function computeResidualConsensus(
   let rawResidualSum = 0;
   let rawResidualCount = 0;
   for (let i = start; i < n; i++) {
-    const odom = odometryPositions[i];
-    const gps = gpsPositions[i];
+    const odom = odometryPositions[i]!;
+    const gps = gpsPositions[i]!;
     vec3.set(tmp, odom[0], odom[1], odom[2]);
     vec3.transformMat4(tmp, tmp, glMat);
     const predicted = calcGpsCoords(zeroRef, tmp);
@@ -491,7 +461,7 @@ export function computeGpsAccuracy(
   const accs: number[] = [];
   let countAccurate = 0;
   for (let i = start; i < gpsPositions.length; i++) {
-    const acc = gpsPositions[i].latLongAccuracy;
+    const acc = gpsPositions[i]!.latLongAccuracy;
     if (typeof acc === 'number' && Number.isFinite(acc)) {
       accs.push(acc);
       if (acc <= 5) countAccurate += 1;
@@ -550,8 +520,8 @@ export function computeCoverage(
   let walked = 0;
   const bearings: number[] = [];
   for (let i = 1; i < odometryPositions.length; i++) {
-    const a = odometryPositions[i - 1];
-    const b = odometryPositions[i];
+    const a = odometryPositions[i - 1]!;
+    const b = odometryPositions[i]!;
     const dN = b[0] - a[0];
     const dE = b[2] - a[2];
     const segLen = Math.hypot(dN, dE);
@@ -565,10 +535,10 @@ export function computeCoverage(
     const sorted = [...bearings].sort((a, b) => a - b);
     let maxGap = 0;
     for (let i = 1; i < sorted.length; i++) {
-      const gap = sorted[i] - sorted[i - 1];
+      const gap = sorted[i]! - sorted[i - 1]!;
       if (gap > maxGap) maxGap = gap;
     }
-    const wrapGap = 360 - sorted[sorted.length - 1] + sorted[0];
+    const wrapGap = 360 - sorted[sorted.length - 1]! + sorted[0]!;
     if (wrapGap > maxGap) maxGap = wrapGap;
     spread = Math.max(0, 360 - maxGap);
   }
@@ -699,13 +669,13 @@ export function computeGpsVsFusedDivergence(
   const tmp = vec3.create();
   let maxDiv = 0;
   for (let i = start; i < n; i++) {
-    const odom = odometryPositions[i];
+    const odom = odometryPositions[i]!;
     vec3.set(tmp, odom[0], odom[1], odom[2]);
     vec3.transformMat4(tmp, tmp, glMat);
     const predicted = calcGpsCoords(zeroRef, tmp);
     const d = distanceInMeters(predicted, {
-      lat: gpsPositions[i].latitude,
-      lon: gpsPositions[i].longitude,
+      lat: gpsPositions[i]!.latitude,
+      lon: gpsPositions[i]!.longitude,
     });
     if (Number.isFinite(d) && d > maxDiv) maxDiv = d;
   }
@@ -824,15 +794,9 @@ export function computeTrackingQualityReport(
   const gpsPositions = selectGpsPositions(rootState);
   const odometryPositions = selectOdometryPositions(rootState);
   const zeroRef = selectZeroReference(rootState);
-  const trackingPhase = selectTrackingPhase(
-    rootState
-  );
-  const sensorOrientation = selectLastSensorOrientation(
-    rootState
-  );
-  const lastPose = selectLastValidPose(
-    rootState
-  );
+  const trackingPhase = selectTrackingPhase(rootState);
+  const sensorOrientation = selectLastSensorOrientation(rootState);
+  const lastPose = selectLastValidPose(rootState);
   const snapshots = selectRecentAlignments(rootState);
   const firstAgreementIdx = selectFirstAgreementObservationIndex(rootState);
 
@@ -975,7 +939,7 @@ function matricesNearlyEqual(
 ): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (Math.abs(a[i] - b[i]) > 1e-9) return false;
+    if (Math.abs(a[i]! - b[i]!) > 1e-9) return false;
   }
   return true;
 }
@@ -1099,18 +1063,10 @@ export function createTrackingQualityListenerMiddleware(
         const snapshots = selectRecentAlignments(midState);
         if (snapshots.length >= 2) {
           const conv = computeConvergence(snapshots);
-          const sensorOr = selectLastSensorOrientation(
-            midState
-          );
-          const pose = selectLastValidPose(
-            midState
-          );
+          const sensorOr = selectLastSensorOrientation(midState);
+          const pose = selectLastValidPose(midState);
           const alignment = selectAlignmentMatrix(midState);
-          const compass = computeCompassAgreement(
-            alignment,
-            sensorOr,
-            pose
-          );
+          const compass = computeCompassAgreement(alignment, sensorOr, pose);
           if (
             conv.score >= 0.7 &&
             compass.headingDeltaDeg !== null &&

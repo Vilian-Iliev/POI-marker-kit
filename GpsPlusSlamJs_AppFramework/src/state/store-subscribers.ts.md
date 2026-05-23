@@ -8,10 +8,10 @@ Uses `subscribeToSelector` for selective change detection — each state slice (
 
 ## Public API
 
-| Symbol                 | Signature                                                                                                                                                            | Description                                                              |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `wireStoreSubscribers` | `(store: SubscribableStore, deps: StoreSubscriberDeps) => () => void`                                                                                                | Subscribe to store changes and drive visualizers. Returns unsubscribe.   |
-| `SubscribableStore`    | `{ getState, subscribe }` interface                                                                                                                                  | Minimal store contract — satisfied by `RecorderStore` and replay stores. |
+| Symbol                 | Signature                                                                                                                                                                                  | Description                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `wireStoreSubscribers` | `(store: SubscribableStore, deps: StoreSubscriberDeps) => () => void`                                                                                                                      | Subscribe to store changes and drive visualizers. Returns unsubscribe.   |
+| `SubscribableStore`    | `{ getState, subscribe }` interface                                                                                                                                                        | Minimal store contract — satisfied by `RecorderStore` and replay stores. |
 | `StoreSubscriberDeps`  | `{ applyAlignmentMatrix, gpsEventVisualizer, mapOverlay?, refPointVisualizer?, onNewGpsPosition?, onNewOdomPose?, onAlignmentSnapshot?, onNewGpsLatLng?, showAccuracySpheres? }` interface | Injected dependencies for visualization updates.                         |
 
 ### `mapOverlay` dependency (optional)
