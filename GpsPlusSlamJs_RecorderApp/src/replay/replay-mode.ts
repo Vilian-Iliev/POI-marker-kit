@@ -41,6 +41,11 @@ import {
 } from 'gps-plus-slam-app-framework/ar/webxr-session';
 import { createLogger } from 'gps-plus-slam-app-framework/utils/logger';
 import { loadRecording } from '../storage/recording-loader.js';
+import { createStoreRef } from '../state/store-ref';
+import { FrameTileVisualizer } from '../visualization/frame-tile-visualizer';
+import { decodeFrameTexture } from '../visualization/frame-texture-decoder';
+import { wireFrameTileSubscribers } from '../visualization/wire-frame-tile-subscribers';
+import { createZipFrameBlobSource } from '../storage/zip-frame-blob-source';
 import * as THREE from 'three';
 
 const log = createLogger('ReplayMode');
@@ -128,8 +133,35 @@ export async function startReplayMode(
   });
 
   // Initialize Three.js replay scene (no WebXR)
-  initReplayScene(config.container);
+  const replaySceneState = initReplayScene(config.container);
   log.info('Replay scene initialized');
+
+  // F3.5 — wire frame-tile visualization for add2dImage actions so the
+  // 2D camera frames recorded during the original session reappear as
+  // textured planes in the replay scene. Failure here (e.g. zip lacks a
+  // frames/ subdir) must not crash replay, so the whole wire-up is
+  // best-effort.
+  let unsubscribeFrameTiles: (() => void) | null = null;
+  let frameTileVisualizer: FrameTileVisualizer | null = null;
+  try {
+    const blobSource = await createZipFrameBlobSource(zipData);
+    frameTileVisualizer = new FrameTileVisualizer(replaySceneState.scene);
+    const storeRef = createStoreRef(store);
+    unsubscribeFrameTiles = wireFrameTileSubscribers({
+      storeRef,
+      visualizer: frameTileVisualizer,
+      blobSource,
+      decodeTexture: decodeFrameTexture,
+      onError: (err, imageFile) => {
+        log.warn(`Frame tile decode failed for ${imageFile}`, err);
+      },
+    });
+  } catch (err) {
+    log.warn(
+      'Frame tile visualizer wiring skipped; replay continues without frame tiles',
+      err
+    );
+  }
 
   // Get the alignment lerper (Issue 4) — store subscribers route alignment
   // updates through the lerper for smooth interpolation instead of snapping.
@@ -263,6 +295,8 @@ export async function startReplayMode(
       engine.dispose();
       unsubscribe();
       unsubscribeRefPoints();
+      unsubscribeFrameTiles?.();
+      frameTileVisualizer?.dispose();
       disposeReplayScene();
       log.info('Replay mode disposed');
     },
