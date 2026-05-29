@@ -32,6 +32,7 @@ Captures periodic JPEG screenshots from the WebGL canvas during AR recording. Us
 3. **Safety timeout**: If a capture promise doesn't resolve within `captureTimeoutMs` (default 5s), the `captureInProgress` flag is force-reset to prevent permanent pipeline deadlock. This is a belt-and-suspenders defense — normal operation always resolves/rejects the promise.
 4. **Suspicious image detection**: If blob size < `MIN_VALID_IMAGE_BYTES` (5000), `onSuspiciousImage` is called. The image is still stored for debugging.
 5. **Custom capture function**: When `captureFrame` callback is provided, it's used instead of `canvas.toBlob()`. This supports the "blit" technique for WebXR opaque textures.
+6. **Epoch-ms timestamp from frame time**: `CapturedImage.timestamp` is `performance.timeOrigin + time`, where `time` is the XR frame `DOMHighResTimeStamp` passed to `onFrame()`. This keeps it in the exact same epoch-ms time domain as the same-frame AR pose and the other per-frame streams (notably depth samples, which use the identical conversion), avoiding the sub-frame drift that `Date.now()` would introduce.
 
 ## Examples
 

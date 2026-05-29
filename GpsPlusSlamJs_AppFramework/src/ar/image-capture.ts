@@ -186,7 +186,12 @@ export class ImageCaptureManager {
     this.captureInProgress = true;
     this.lastCaptureTime = time;
 
-    const timestamp = Date.now();
+    // Derive the timestamp from the XR frame time (a DOMHighResTimeStamp) so it
+    // shares the exact epoch-ms time domain as the AR pose and the other
+    // per-frame streams (e.g. depth samples also use performance.timeOrigin +
+    // time). Using Date.now() here would introduce sub-frame drift and break
+    // precise alignment between the image and its same-frame pose.
+    const timestamp = performance.timeOrigin + time;
     const screenRotation = this.callbacks.getScreenRotation();
     // Use 1-based indexing (frame-000001.jpg, frame-000002.jpg, etc.)
     // as specified in opfs-storage.ts.md invariants

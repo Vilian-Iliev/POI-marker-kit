@@ -228,6 +228,29 @@ describe('image-capture', () => {
       });
     });
 
+    it('derives the timestamp from the XR frame time (performance.timeOrigin + time)', async () => {
+      // Why this test matters: the captured timestamp flows into the
+      // add2dImage `capturedAt` field and must share the exact same epoch-ms
+      // time domain as every other per-frame stream (e.g. depth samples, which
+      // use `performance.timeOrigin + time`). Using Date.now() instead would
+      // introduce sub-frame drift, breaking precise alignment between images
+      // and the AR pose captured in the same frame. See depth-sampler.ts and
+      // 2026-04-18-recorder-app-code-audit.md (Issue 9).
+      manager = new ImageCaptureManager(mockCanvas, mockCallbacks);
+      manager.start();
+
+      const frameTime = 1234.5; // DOMHighResTimeStamp from the XR frame loop
+      manager.onFrame(frameTime);
+
+      await vi.waitFor(() => {
+        expect(mockCallbacks.onCaptured).toHaveBeenCalledWith(
+          expect.objectContaining({
+            timestamp: performance.timeOrigin + frameTime,
+          })
+        );
+      });
+    });
+
     it('should not call onCaptured if toBlob returns null', async () => {
       // Why this test matters: handles edge case of failed capture
       mockCanvas.toBlob = vi.fn((callback: BlobCallback) => {
