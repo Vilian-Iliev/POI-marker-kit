@@ -645,10 +645,13 @@ describe('Logger', () => {
       expect(mockCaptureException).not.toHaveBeenCalled();
     });
 
-    it('should call captureMessage with warning level for log.warn()', () => {
+    it('should call captureMessage with warning level and stable fingerprint for log.warn()', () => {
       // Why: warnings must appear as standalone issues in Sentry so the team
       // can monitor unexpected conditions (e.g., malformed zip filenames)
       // without waiting for a subsequent error to surface them as breadcrumbs.
+      // The fingerprint must be stable per (level, tag) so that dynamic values
+      // embedded in the message (frame indices, sizes, filenames) collapse into
+      // a single Sentry Issue instead of fragmenting into hundreds.
       const logger = createLogger('ZipReader');
 
       logger.warn('Unexpected filename: "actions/my-notes.json"');
@@ -656,18 +659,62 @@ describe('Logger', () => {
       expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
       expect(mockCaptureMessage).toHaveBeenCalledWith(
         '[ZipReader] Unexpected filename: "actions/my-notes.json"',
-        'warning'
+        { level: 'warning', fingerprint: ['log', 'warning', 'ZipReader'] }
       );
     });
 
-    it('should NOT call captureMessage for debug/info/error logs', () => {
-      // Why: only warnings use captureMessage; errors use captureException,
-      // and debug/info are breadcrumbs only.
+    it('should group warnings from the same tag under one fingerprint despite dynamic message content', () => {
+      // Why: two warnings from the same logger with different dynamic payloads
+      // must share a fingerprint so they group into one Issue.
+      const logger = createLogger('Capture');
+
+      logger.warn('Suspicious image at frame 12: size 100 bytes');
+      logger.warn('Suspicious image at frame 87: size 250 bytes');
+
+      expect(mockCaptureMessage).toHaveBeenCalledTimes(2);
+      const fingerprints = mockCaptureMessage.mock.calls.map(
+        (call) => (call[1] as { fingerprint: string[] }).fingerprint
+      );
+      expect(fingerprints[0]).toEqual(['log', 'warning', 'Capture']);
+      expect(fingerprints[1]).toEqual(['log', 'warning', 'Capture']);
+    });
+
+    it('should call captureMessage with error level and stable fingerprint for string-only log.error()', () => {
+      // Why (option B): a plain-string log.error must still surface as a Sentry
+      // Issue, not only a breadcrumb/Log. The stable (level, tag) fingerprint
+      // collapses dynamic error messages into one Issue.
+      const logger = createLogger('Capture');
+
+      logger.error('Suspicious image detected at frame 42: size 0 bytes');
+
+      expect(mockCaptureException).not.toHaveBeenCalled();
+      expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+      expect(mockCaptureMessage).toHaveBeenCalledWith(
+        '[Capture] Suspicious image detected at frame 42: size 0 bytes',
+        { level: 'error', fingerprint: ['log', 'error', 'Capture'] }
+      );
+    });
+
+    it('should NOT call captureMessage when log.error receives an Error object', () => {
+      // Why: when an Error is present, captureException already produces an
+      // Issue with a full stack trace; the string-only fallback must not also
+      // fire and create a duplicate Issue.
+      const logger = createLogger('Store');
+
+      logger.error('Failed to persist action:', new Error('QuotaExceeded'));
+
+      expect(mockCaptureException).toHaveBeenCalledTimes(1);
+      expect(mockCaptureMessage).not.toHaveBeenCalled();
+    });
+
+    it('should NOT call captureMessage for debug/info logs', () => {
+      // Why: only warn (captureMessage) and error (captureException or
+      // string-only captureMessage) report standalone events; debug/info are
+      // breadcrumbs only.
       const logger = createLogger('Test');
 
       logger.debug('debug msg');
       logger.info('info msg');
-      logger.error('error msg');
 
       expect(mockCaptureMessage).not.toHaveBeenCalled();
     });

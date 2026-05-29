@@ -10,50 +10,40 @@ performance monitoring, and structured logging throughout the RecorderApp.
 ### `initSentry(): void`
 
 Initializes the Sentry SDK. Must be called as early as possible in `main.ts`,
-before any other code runs.
-
-### `captureException(error: unknown): void`
-
-Captures an exception and sends it to Sentry. Use in try/catch blocks.
+before any other code runs. This is the **only** export of this module — code
+that needs other Sentry APIs (e.g. `captureException`, `startSpan`) imports them
+directly from `@sentry/browser`.
 
 ```ts
-try {
-  riskyOperation();
-} catch (error) {
-  captureException(error);
-}
+import { initSentry } from './utils/sentry';
+
+initSentry();
 ```
 
-### `startSpan(options, callback): ReturnType<callback>`
+## How errors and logs reach Sentry
 
-Creates a performance span for measuring operations. Returns the callback's
-return value.
+This module only calls `Sentry.init(...)`. There are two independent paths that
+actually send data, and they land in different Sentry products:
 
-```ts
-startSpan({ op: 'ui.click', name: 'Start Recording' }, (span) => {
-  span.setAttribute('scenarioId', scenarioId);
-  performAction();
-});
-```
+- **Issues** — produced by the shared logger
+  (`@gps-plus-slam/app-framework` `logger.ts`): `log.warn()` and `log.error()`
+  call `Sentry.captureMessage` / `Sentry.captureException` with a stable
+  `['log', level, tag]` fingerprint. This is the primary way warn/error level
+  logs become standalone Issues.
+- **Logs** — produced by the `consoleLoggingIntegration` configured here, which
+  forwards `console.warn` / `console.error` to the Sentry **Logs** product
+  (`_experiments.enableLogs: true`). This is a separate view from Issues.
 
-### `logger`
-
-Sentry's structured logger for sending log events.
-
-```ts
-logger.info('Session started', { sessionId: '123' });
-logger.error('Failed to save frame', { frameIndex: 42 });
-```
-
-### `Sentry`
-
-Re-exported Sentry namespace for advanced usage.
+A single `log.warn` / `log.error` therefore typically appears in both views.
 
 ## Invariants & Assumptions
 
 - `initSentry()` must be called before any other Sentry API usage
 - DSN is hardcoded; for multi-environment support, this could be made configurable
-- Logging integration captures `warn` and `error` console calls automatically
+- `consoleLoggingIntegration` captures `warn` and `error` console calls and
+  sends them to Sentry **Logs** (not Issues)
+- Standalone **Issues** for warn/error come from the framework logger, not this
+  module (see "How errors and logs reach Sentry" above)
 - Source maps are uploaded during build via the Vite plugin
 - Performance monitoring is enabled with `tracesSampleRate: 1.0` (100% of transactions captured)
 - Browser tracing integration provides automatic instrumentation for page loads, navigation, and fetch/XHR requests

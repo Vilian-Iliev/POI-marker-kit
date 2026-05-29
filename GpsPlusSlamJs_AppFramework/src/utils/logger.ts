@@ -11,7 +11,11 @@
  *
  * Sentry Integration:
  * - All log levels add Sentry breadcrumbs for debugging context
- * - log.error() with Error objects automatically reports to Sentry
+ * - log.warn() reports a standalone Sentry Issue (captureMessage)
+ * - log.error() reports a standalone Sentry Issue: captureException for Error
+ *   arguments, or a captureMessage fallback for string-only errors
+ * - warn/error Issues use a stable ['log', level, tag] fingerprint so dynamic
+ *   message content collapses into one Issue per (level, tag)
  */
 
 import * as Sentry from '@sentry/browser';
@@ -275,21 +279,49 @@ function addSentryBreadcrumb(
  * Report a warning to Sentry as a standalone message.
  * Called for log.warn() so warnings are independently visible in the
  * Sentry dashboard, not only as breadcrumbs attached to later exceptions.
+ *
+ * A stable fingerprint of `['log', 'warning', tag]` is set so that warnings
+ * from the same logger collapse into a single Sentry Issue even when the
+ * message embeds dynamic values (frame indices, sizes, filenames). Without
+ * this, each distinct message text would fingerprint to its own Issue and
+ * flood the dashboard.
  */
 function reportWarningToSentry(tag: string, args: unknown[]): void {
   const message = `[${tag}] ${args.map((arg) => serializeArg(arg)).join(' ')}`;
-  Sentry.captureMessage(message, 'warning');
+  Sentry.captureMessage(message, {
+    level: 'warning',
+    fingerprint: ['log', 'warning', tag],
+  });
 }
 
 /**
- * Report Error objects to Sentry.
- * Only called for log.error() - other levels just add breadcrumbs.
+ * Report log.error() arguments to Sentry as standalone Issues.
+ *
+ * - For every argument that is an `Error`, calls `captureException` so the
+ *   Issue carries a full stack trace.
+ * - If NO argument is an `Error` (a string-only `log.error(...)`), falls back
+ *   to `captureMessage(message, 'error')` so the error still surfaces as an
+ *   Issue instead of only a breadcrumb/Log.
+ *
+ * The fallback uses a stable fingerprint of `['log', 'error', tag]` for the
+ * same grouping reason as warnings (see `reportWarningToSentry`). The fallback
+ * is mutually exclusive with `captureException` to avoid duplicate Issues when
+ * an Error is present.
  */
-function reportErrorsToSentry(args: unknown[]): void {
+function reportErrorsToSentry(tag: string, args: unknown[]): void {
+  let capturedError = false;
   for (const arg of args) {
     if (arg instanceof Error) {
       Sentry.captureException(arg);
+      capturedError = true;
     }
+  }
+  if (!capturedError) {
+    const message = `[${tag}] ${args.map((arg) => serializeArg(arg)).join(' ')}`;
+    Sentry.captureMessage(message, {
+      level: 'error',
+      fingerprint: ['log', 'error', tag],
+    });
   }
 }
 
@@ -330,8 +362,9 @@ export function createLogger(tag: string): Logger {
     error: (...args: unknown[]): void => {
       addToBuffer(LogLevel.ERROR, tag, args);
       addSentryBreadcrumb(LogLevel.ERROR, tag, args);
-      // Report Error objects to Sentry for visibility in dashboard
-      reportErrorsToSentry(args);
+      // Report Error objects to Sentry for visibility in dashboard.
+      // String-only errors fall back to captureMessage (see reportErrorsToSentry).
+      reportErrorsToSentry(tag, args);
       if (globalLogLevel <= LogLevel.ERROR) {
         console.error(prefix, ...args);
       }
