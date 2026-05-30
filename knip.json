@@ -1,8 +1,8 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "rules": {
-    "exports": "warn",
-    "types": "warn"
+    "exports": "error",
+    "types": "error"
   },
   "workspaces": {
     ".": {

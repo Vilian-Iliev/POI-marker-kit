@@ -23,8 +23,10 @@ export function isZipFileName(name: string): boolean {
 /**
  * Recognize ref-point JSON entries inside a session ZIP.
  * Expected path: `refPoints/{id}.json` (anything else is skipped).
+ *
+ * Module-private: only `extractRefPointEntriesFromZip` (below) consumes it.
  */
-export function isRefPointEntry(entryPath: string): boolean {
+function isRefPointEntry(entryPath: string): boolean {
   return (
     entryPath.startsWith('refPoints/') &&
     entryPath.endsWith('.json') &&

@@ -47,8 +47,9 @@ state machine collapses the score to `'warming-up' | 'ar-lost' | 'degraded' |
   - `trackingQualityReducer`.
   - `snapshotPushed(AlignmentSnapshot)`, `snapshotsTrimmed({size})`,
     `reportUpdated(report | null)`, `firstAgreementReached(observationIndex)`,
-    `degradedCountUpdated(count)`,
-    `smoothedConvergenceUpdated(value | null)`, `resetTrackingQuality()`.
+    `degradedCountUpdated(count)`, `resetTrackingQuality()`.
+    (`smoothedConvergenceUpdated` is module-private — dispatched only by the
+    listener middleware; not part of the public action surface.)
 - **Selectors**
   - `selectTrackingQuality(state)`, `selectRecentAlignments(state)`,
     `selectFirstAgreementObservationIndex(state)`.

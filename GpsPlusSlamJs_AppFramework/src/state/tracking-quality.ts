@@ -825,9 +825,13 @@ export const {
   reportUpdated,
   firstAgreementReached,
   degradedCountUpdated,
-  smoothedConvergenceUpdated,
   resetTrackingQuality,
 } = trackingQualitySlice.actions;
+
+// Module-private: dispatched only by the listener middleware below to persist
+// the EMA-smoothed convergence between aggregator passes. Not part of the
+// public action surface, so it is intentionally not re-exported.
+const { smoothedConvergenceUpdated } = trackingQualitySlice.actions;
 
 export const trackingQualityReducer = trackingQualitySlice.reducer;
 
@@ -1136,11 +1140,11 @@ function matricesNearlyEqual(
 }
 
 /**
- * Action types the listener reacts to. Exported so tests and the
- * store factory can wire them up; the strings are the canonical
+ * Action types the listener reacts to. Module-private: consumed only by the
+ * listener predicate and middleware below. The strings are the canonical
  * RTK auto-generated action types.
  */
-export const TRACKING_QUALITY_INPUT_ACTIONS = {
+const TRACKING_QUALITY_INPUT_ACTIONS = {
   gpsRecorded: 'gpsData/recordGpsEvent',
   setZeroPos: 'gpsData/setZeroPos',
   poseReceived: 'tracking/poseReceived',
