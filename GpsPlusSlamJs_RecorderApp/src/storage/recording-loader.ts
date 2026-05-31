@@ -147,13 +147,37 @@ export function isMarkRefPointAction(
   );
 }
 
-function pickGpsPoint(
+/**
+ * Select the GPS point for a `markReferencePoint` payload, or `null` when no
+ * usable point is present.
+ *
+ * Beyond picking the canonical post-migration field (`rawGpsPoint`, with
+ * `gpsPoint` as a defensive fallback for callers that bypass migration), this
+ * rejects points whose `latitude`/`longitude` are not finite numbers. The
+ * migration layer drops such points only when it synthesizes
+ * `refPoints/addRefPointEntry` actions — but {@link buildDefsFromActions}
+ * reconstructs ref points directly from the preserved
+ * `gpsData/markReferencePoint` actions, bypassing that check. Without the
+ * finiteness guard here a malformed mark would produce a
+ * {@link RefPointDefinition} carrying `NaN`/`undefined` coordinates that later
+ * feed the H3 matcher and `selectKnownAnchorsByCell`. Returning `null` makes
+ * {@link buildDefsFromActions} skip the action via its existing
+ * `if (!gps) continue;` path.
+ *
+ * Exported for direct unit testing of this boundary contract.
+ */
+export function pickGpsPoint(
   payload: MarkRefPointPayload
 ): MarkRefPointGpsPoint | null {
   // Post-migration the canonical field is `rawGpsPoint`. Accept either to
   // stay resilient if a caller bypasses migration (which we still defensively
   // fold-in by also checking `gpsPoint`).
-  return payload.rawGpsPoint ?? payload.gpsPoint ?? null;
+  const gps = payload.rawGpsPoint ?? payload.gpsPoint ?? null;
+  if (!gps) return null;
+  if (!Number.isFinite(gps.latitude) || !Number.isFinite(gps.longitude)) {
+    return null;
+  }
+  return gps;
 }
 
 // ---------------------------------------------------------------------------

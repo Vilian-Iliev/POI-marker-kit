@@ -23,6 +23,7 @@ import { BlobWriter, ZipWriter, TextReader } from '@zip.js/zip.js';
 import {
   loadRecording,
   isMarkRefPointAction,
+  pickGpsPoint,
   type LoadedRecording,
 } from './recording-loader';
 import type { RecordedAction } from 'gps-plus-slam-app-framework/storage/zip-reader';
@@ -169,6 +170,67 @@ describe('isMarkRefPointAction — pose-array length contract', () => {
 
   it('rejects empty pose arrays even though they are arrays', () => {
     expect(isMarkRefPointAction(baseAction([], []))).toBe(false);
+  });
+});
+
+/**
+ * Boundary-contract tests for {@link pickGpsPoint}.
+ *
+ * Why this matters: the migration layer drops non-finite GPS coordinates only
+ * when it synthesizes `refPoints/addRefPointEntry` actions, but
+ * `buildDefsFromActions` reconstructs ref points directly from the preserved
+ * `gpsData/markReferencePoint` actions. `pickGpsPoint` is therefore the only
+ * place on that path that validates the coordinates. A point with
+ * `NaN`/`undefined` lat/lon that slipped through would produce a
+ * `RefPointDefinition` whose observations carry non-finite coordinates,
+ * feeding the H3 matcher and `selectKnownAnchorsByCell` garbage. The guard
+ * must return `null` so the malformed action is skipped.
+ */
+describe('pickGpsPoint — finite-coordinate contract', () => {
+  const payload = (
+    gps: Record<string, unknown> | undefined
+  ): Parameters<typeof pickGpsPoint>[0] =>
+    ({
+      id: 'h3-abc',
+      position: [1, 2, 3],
+      rotation: [0, 0, 0, 1],
+      timestamp: 1_700_000_000_000,
+      rawGpsPoint: gps,
+    }) as unknown as Parameters<typeof pickGpsPoint>[0];
+
+  it('returns the point when latitude and longitude are finite', () => {
+    const gps = { latitude: 50.77, longitude: 6.08 };
+    expect(pickGpsPoint(payload(gps))).toBe(gps);
+  });
+
+  it('returns null when no GPS point is present', () => {
+    expect(pickGpsPoint(payload(undefined))).toBeNull();
+  });
+
+  it('returns null when latitude is NaN', () => {
+    expect(pickGpsPoint(payload({ latitude: NaN, longitude: 6.08 }))).toBeNull();
+  });
+
+  it('returns null when longitude is undefined', () => {
+    expect(pickGpsPoint(payload({ latitude: 50.77 }))).toBeNull();
+  });
+
+  it('returns null when coordinates are Infinity', () => {
+    expect(
+      pickGpsPoint(payload({ latitude: Infinity, longitude: 6.08 }))
+    ).toBeNull();
+  });
+
+  it('falls back to the legacy `gpsPoint` field when `rawGpsPoint` is absent', () => {
+    const gps = { latitude: 50.77, longitude: 6.08 };
+    const p = {
+      id: 'h3-abc',
+      position: [1, 2, 3],
+      rotation: [0, 0, 0, 1],
+      timestamp: 1_700_000_000_000,
+      gpsPoint: gps,
+    } as unknown as Parameters<typeof pickGpsPoint>[0];
+    expect(pickGpsPoint(p)).toBe(gps);
   });
 });
 
