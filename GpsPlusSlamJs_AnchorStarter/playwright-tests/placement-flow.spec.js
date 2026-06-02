@@ -130,10 +130,17 @@ test.describe("Anchor starter — Tier 1 placement flow", () => {
     await page.getByTestId("start-button").click();
     await expect(page.getByTestId("placement")).toBeVisible();
 
-    // cache-hit branch: the place button is hidden (we are relocalising), and
+    // cache-hit branch: the place button stays hidden (no re-placement), and
     // the marker is rebuilt from the URL-decoded spec (default style).
     await expect(page.getByTestId("place-button")).toBeHidden();
-    await expect(page.getByTestId("banner")).toContainText("re-localise");
+
+    // The default fake tracking report is already "ready", so the cache-hit
+    // boot advances relocalising → anchor-shown immediately; assert that
+    // durable end state rather than the transient "re-localise" banner (the
+    // relocalising copy is pinned separately in placement-view.test.ts).
+    await expect(page.getByTestId("banner")).toContainText(
+      "Your saved anchor is shown",
+    );
 
     const markerCalls = await page.evaluate(
       () => window.__anchorStarterTest.markerCalls,
