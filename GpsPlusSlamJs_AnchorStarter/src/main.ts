@@ -26,34 +26,20 @@ import {
   createGpsPositionHandler,
   updateDeviceOrientation,
   startSession,
-  selectTrackingQuality,
   computeOnboardingGuidance,
   selectAlignmentMatrix,
   selectZeroReference,
 } from "gps-plus-slam-app-framework/state";
 import { NullStorageBackend } from "gps-plus-slam-app-framework/storage";
 import {
-  initAR,
-  getArWorldGroup,
-  getCamera,
   getCurrentArPose,
   setTrackingStore,
 } from "gps-plus-slam-app-framework/ar/webxr-session";
 import {
-  startGpsWatch,
   stopGpsWatch,
-  startOrientationWatch,
-  requestDeviceOrientationPermission,
   type GpsPosition,
 } from "gps-plus-slam-app-framework/sensors";
-import {
-  checkWebXRSupport,
-  checkGeolocationPermission,
-} from "gps-plus-slam-app-framework/sensors";
-import {
-  createGpsAnchor,
-  type GpsAnchor,
-} from "gps-plus-slam-app-framework/visualization";
+import { type GpsAnchor } from "gps-plus-slam-app-framework/visualization";
 import type { LatLong, LatLongAlt } from "gps-plus-slam-app-framework/core";
 
 import {
@@ -71,8 +57,9 @@ import {
 import { toGuidanceView } from "./guidance-view.js";
 import { toPlacementView } from "./placement-view.js";
 import { isFullySupported, capabilityMessage } from "./capability.js";
+import { getSeams } from "./seams.js";
 // --- your content here -----------------------------------------------------
-import { createAnchorMarker, type MarkerOptions } from "./marker.js";
+import { type MarkerOptions } from "./marker.js";
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -136,7 +123,7 @@ function toLatLongAlt(pos: GpsPosition): LatLongAlt {
 // ---------------------------------------------------------------------------
 
 function renderGuidance(): void {
-  const report = store ? sel(selectTrackingQuality) : null;
+  const report = store ? sel(getSeams().selectTrackingQuality) : null;
   const view = toGuidanceView(computeOnboardingGuidance(report));
   dom.guidanceTitle.textContent = view.title;
   dom.guidanceBarFill.style.width = `${view.barWidthPct}%`;
@@ -176,7 +163,7 @@ function dispatchSetup(event: SetupEvent): void {
 /** Translate the onboarding guidance into the FSM's trackingReady flag. */
 function syncTrackingReady(): void {
   if (!store) return;
-  const report = sel(selectTrackingQuality);
+  const report = sel(getSeams().selectTrackingQuality);
   const ready = computeOnboardingGuidance(report).phase === "ready";
   if (ready !== lastTrackingReady) {
     lastTrackingReady = ready;
@@ -198,14 +185,15 @@ function spawnAnchor(
   skipBootstrap: boolean,
   markerOptions: MarkerOptions = {},
 ): GpsAnchor {
-  const arWorldGroup = getArWorldGroup();
-  const camera = getCamera();
+  const seams = getSeams();
+  const arWorldGroup = seams.getArWorldGroup();
+  const camera = seams.getCamera();
   if (!arWorldGroup || !camera) {
     throw new Error("AR scene not ready — cannot place anchor");
   }
-  const marker = createAnchorMarker(markerOptions);
+  const marker = seams.createAnchorMarker(markerOptions);
   arWorldGroup.add(marker);
-  return createGpsAnchor({
+  return seams.createGpsAnchor({
     object3D: marker,
     arWorldGroup,
     camera,
@@ -303,7 +291,7 @@ async function startAr(): Promise<void> {
 
   const appContainer = el("app");
   try {
-    await initAR(appContainer);
+    await getSeams().initAR(appContainer);
   } catch (err) {
     dom.startButton.disabled = false;
     dom.startButton.textContent = "Start AR";
@@ -327,14 +315,16 @@ async function startAr(): Promise<void> {
     store,
     getArPose: getCurrentArPose,
   });
-  startGpsWatch((pos) => {
+  getSeams().startGpsWatch((pos) => {
     lastGps = toLatLongAlt(pos);
     gpsHandler(pos);
   });
 
   // Device orientation (compass) feeds the GPS event payload.
-  await requestDeviceOrientationPermission();
-  startOrientationWatch((orientation) => updateDeviceOrientation(orientation));
+  await getSeams().requestDeviceOrientationPermission();
+  getSeams().startOrientationWatch((orientation) =>
+    updateDeviceOrientation(orientation),
+  );
 
   // Reveal the live UI and choose the branch from the cache.
   dom.startScreen.hidden = true;
@@ -371,9 +361,10 @@ async function startAr(): Promise<void> {
 async function main(): Promise<void> {
   render();
 
+  const seams = getSeams();
   const [webxr, geolocation] = await Promise.all([
-    checkWebXRSupport(),
-    checkGeolocationPermission(),
+    seams.checkWebXRSupport(),
+    seams.checkGeolocationPermission(),
   ]);
   const support = {
     webxr: webxr.supported,

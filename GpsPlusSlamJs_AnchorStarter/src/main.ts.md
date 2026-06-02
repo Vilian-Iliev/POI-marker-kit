@@ -7,6 +7,15 @@
 - **Public API:** none (side-effecting entry). Editable seam is
   `createAnchorMarker()` in [marker.ts](marker.ts), imported under the clearly
   marked `--- your content here ---` banner.
+- **Test seam:** every framework call site (`initAR`, `getArWorldGroup`,
+  `getCamera`, `startGpsWatch`, `startOrientationWatch`,
+  `requestDeviceOrientationPermission`, `createGpsAnchor`, `selectTrackingQuality`,
+  `checkWebXRSupport`, `checkGeolocationPermission`, `createAnchorMarker`) is
+  resolved through `getSeams()` from [seams.ts](seams.ts.md) instead of being
+  called directly. In production `getSeams()` returns the real imports; the
+  DEV-only `window.__anchorStarterSeams` override lets the Tier 1 Playwright e2e
+  suite drive the real placement → `?show=` → copy-link glue without WebXR. See
+  the prod-inert guarantee in [seams.ts.md](seams.ts.md).
 - **Key flow:**
   - `main()` probes `checkWebXRSupport` + `checkGeolocationPermission`; if not
     fully supported, shows `capabilityMessage` (E1) and disables Start.
