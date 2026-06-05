@@ -17,7 +17,7 @@ through as that `rootElement`. Under WebXR DOM Overlay the browser composites
 **Invariant:** any HUD/overlay node an app wants visible in AR must be a DOM
 **descendant** of the element passed to `initAR`. A sibling overlay renders in
 the 2D pre-AR layout but disappears once the session starts. This is a DOM
-*nesting* rule, not a `z-index` rule. The repo-meta guard
+_nesting_ rule, not a `z-index` rule. The repo-meta guard
 `tests/repo-config/hud-overlay-nesting.test.js` enforces it for every app's
 `index.html`; the AppFramework README's "DOM-Overlay / HUD stacking convention"
 documents it for app authors.
