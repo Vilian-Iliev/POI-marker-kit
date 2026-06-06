@@ -65,9 +65,14 @@ export function startReticleHitTest(args: {
   let removeEndListener: (() => void) | null = null;
 
   // Reset on session end so a fresh session re-requests its own hit-test source.
+  // `removeEndListener` is cleared too: the listener was bound to the now-ended
+  // session, so the next session must pass the `if (!removeEndListener)` guard
+  // below and register its own "end" listener — otherwise its end would never
+  // reset the source and a third session would keep a stale, dead handle.
   const handleSessionEnd = () => {
     hitTestSource = null;
     hitTestSourceRequested = false;
+    removeEndListener = null;
   };
 
   const unregister = registerXrFrameUpdate(

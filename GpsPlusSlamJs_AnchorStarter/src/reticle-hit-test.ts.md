@@ -30,9 +30,13 @@ only the device-only per-frame plumbing lives here.
   again on `beforeunload`/boot-rollback is safe. It also tears down the live XR
   state: it cancels the `XRHitTestSource` (`source.cancel()`) so it stops running
   after teardown and removes the one-shot `session` `"end"` listener.
-- The `"end"` listener is registered exactly once. The request-retry path resets
-  `hitTestSourceRequested`, so the listener is kept out of that block to avoid
-  stacking a duplicate listener on every failed `requestHitTestSource`.
+- The `"end"` listener is registered exactly once per session. The request-retry
+  path resets `hitTestSourceRequested`, so the listener is kept out of that block
+  to avoid stacking a duplicate listener on every failed `requestHitTestSource`.
+  On session end the handler clears `removeEndListener` (alongside the source
+  state) so a fresh session re-passes the `if (!removeEndListener)` guard and
+  attaches its own `"end"` listener — keeping the reset chain alive across
+  successive sessions, not just the first.
 - Swapped wholesale in e2e via the `startReticleHitTest` seam (Playwright
   Chromium has no WebXR), so the per-frame loop here is verified on-device only.
 
@@ -55,7 +59,8 @@ verified, but the XR _lifecycle_ is unit-tested in
 [reticle-hit-test.test.ts](reticle-hit-test.test.ts) (framework barrels mocked):
 the `"end"` listener is registered exactly once across request retries,
 `dispose()` cancels the live source + removes the listener (and is idempotent),
-a source that resolves after `dispose()` is cancelled rather than adopted, and
+a source that resolves after `dispose()` is cancelled rather than adopted, a
+fresh session re-registers its own `"end"` listener after the first ends, and
 the reticle is driven with the hit pose / hidden with `null` (incl. runtimes
 without `requestHitTestSource`). The placement decision it feeds is unit-tested
 in [placement-decision.test.ts](placement-decision.test.ts), and the e2e

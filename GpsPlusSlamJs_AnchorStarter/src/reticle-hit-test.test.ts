@@ -129,6 +129,43 @@ describe("startReticleHitTest — XR lifecycle", () => {
     expect(requestHitTestSource).toHaveBeenCalledTimes(2);
   });
 
+  it("lets a fresh session re-register its own 'end' listener after the first ends", async () => {
+    // The controller is designed to outlive a session (the "end" handler resets
+    // the source so a fresh session re-requests). If `handleSessionEnd` does not
+    // also clear `removeEndListener`, the `if (!removeEndListener)` guard stays
+    // satisfied and the second session never attaches its own "end" listener —
+    // so its end would never reset the source and a third session keeps a stale,
+    // dead handle. This proves the reset chain survives across sessions.
+    const session1 = makeSession(
+      vi.fn(() => Promise.resolve({ cancel: vi.fn() })),
+    );
+    const frame = { getHitTestResults: vi.fn(() => []) };
+    const arWorldGroup = { add: vi.fn(), remove: vi.fn() };
+
+    start(arWorldGroup);
+
+    tick(session1, frame); // session 1: registers its "end" listener
+    await flush();
+    expect(listenerCalls(session1.addEventListener, "end")).toHaveLength(1);
+
+    // Session 1 ends -> fire its captured "end" handler.
+    const endHandler = listenerCalls(
+      session1.addEventListener,
+      "end",
+    )[0]?.[1] as (() => void) | undefined;
+    endHandler?.();
+
+    // A fresh session takes over the persistent frame loop.
+    const session2 = makeSession(
+      vi.fn(() => Promise.resolve({ cancel: vi.fn() })),
+    );
+    tick(session2, frame);
+    await flush();
+
+    // The second session must have attached its own "end" listener.
+    expect(listenerCalls(session2.addEventListener, "end")).toHaveLength(1);
+  });
+
   it("dispose() cancels the live hit-test source and removes the 'end' listener", async () => {
     const cancel = vi.fn();
     const source = { cancel };
