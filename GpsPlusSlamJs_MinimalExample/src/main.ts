@@ -56,6 +56,7 @@ import type { LatLong, LatLongAlt } from 'gps-plus-slam-app-framework/core';
 import { Vector3 } from 'three';
 
 import { ANCHOR_MODE, coSpawnAtWorldPose } from './co-spawn.js';
+import { createConnectorLine } from './connector-line.js';
 import { decideTapPlacement } from './placement.js';
 import { formatStatus } from './status.js';
 
@@ -246,7 +247,14 @@ function main(): void {
       return;
     }
 
-    const { anchorObject } = coSpawnAtWorldPose({ scene, arWorldGroup, worldPosition });
+    const { cube, anchorObject } = coSpawnAtWorldPose({ scene, arWorldGroup, worldPosition });
+
+    // Draw a red line from the anchored sphere to its floater cube so the pair
+    // (and the drift that opens between them) is identifiable with several pairs
+    // on screen. The line is a child of the sphere — end A is the sphere origin,
+    // end B tracks the cube's world pose each frame.
+    const connector = createConnectorLine({ sphere: anchorObject, cube });
+    registerXrFrameUpdate(connector.update);
 
     // Default bootstrap (NO skipBootstrap): the anchor holds the tapped pose
     // while sampling its own GPS-world pose, then makes its first lazy

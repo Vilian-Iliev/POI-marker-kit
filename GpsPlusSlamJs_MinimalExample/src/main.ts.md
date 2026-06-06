@@ -46,7 +46,10 @@ integration over `createEnableGpsArController` + `registerXrFrameUpdate`.
   the deliberate floater cube under the scene root and an anchored marker under
   `arWorldGroup` at the same world pose, then hands the marker to
   `createGpsAnchor` in its **default bootstrap** (no `skipBootstrap`,
-  `mode: 'snap-when-offscreen'`, seeded with the latest GPS fix).
+  `mode: 'snap-when-offscreen'`, seeded with the latest GPS fix). It also draws a
+  red [connector line](connector-line.ts) from the sphere to its cube (a
+  per-frame `registerXrFrameUpdate`) so each pair — and the drift between them —
+  stays identifiable when several pairs are on screen.
 
 ## Invariants & assumptions
 
