@@ -142,6 +142,12 @@ function startArInteraction(deps: {
         // The reticle's world transform is current from the last rendered frame.
         deps.onPlace(reticle.getWorldPosition(new Vector3()));
       });
+      // Registered once with the other per-session setup so a hit-test retry
+      // (which re-enters the request block below) cannot add duplicate listeners.
+      session.addEventListener('end', () => {
+        hitTestSource = null;
+        hitTestSourceRequested = false;
+      });
     }
 
     if (!hitTestSourceRequested) {
@@ -154,10 +160,6 @@ function startArInteraction(deps: {
           // Allow a later frame to retry if the request failed transiently.
           hitTestSourceRequested = false;
         });
-      session.addEventListener('end', () => {
-        hitTestSource = null;
-        hitTestSourceRequested = false;
-      });
     }
 
     if (!hitTestSource) {
