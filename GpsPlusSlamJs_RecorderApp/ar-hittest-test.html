@@ -263,15 +263,28 @@
         if (state?.baseLayerPersistence && typeof XRSession !== 'undefined') {
           const originalUpdateRenderState =
             XRSession.prototype.updateRenderState;
-          let lastBaseLayer;
+          // Track the last-seen baseLayer PER XRSession instance (keyed on the
+          // call's `this`), mirroring the production helper. A single shared
+          // variable would leak a previous session's baseLayer into a later
+          // session: an XRWebGLLayer is bound to the session it was created
+          // for, so re-supplying a stale layer to a different session throws
+          // InvalidStateError. The WeakMap also lets entries be GC'd with their
+          // sessions.
+          const lastBaseLayerBySession = new WeakMap();
           XRSession.prototype.updateRenderState = function (options = {}) {
-            if (options.baseLayer !== undefined) {
-              lastBaseLayer = options.baseLayer;
+            if (typeof this !== 'object' || this === null) {
+              return originalUpdateRenderState.call(this, options);
             }
-            return originalUpdateRenderState.call(this, {
-              baseLayer: lastBaseLayer,
-              ...options,
-            });
+            if (options.baseLayer !== undefined) {
+              lastBaseLayerBySession.set(this, options.baseLayer);
+            }
+            const remembered = lastBaseLayerBySession.get(this);
+            return originalUpdateRenderState.call(
+              this,
+              remembered !== undefined
+                ? { baseLayer: remembered, ...options }
+                : options
+            );
           };
           workaroundApplied.baseLayerPersistence = true;
           console.log(
