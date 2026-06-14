@@ -35,6 +35,18 @@ export interface SessionEntry {
   fileHandle: FileSystemFileHandle;
   /** Parsed UTC date from filename, or null if filename doesn't match pattern */
   date: Date | null;
+  /**
+   * Per-tour H3 coverage index (res-11 cells the GPS path crossed), read from
+   * the recording's `session.json` during metadata discovery. Powers the
+   * map-centric recording browser (tile → which tours cross it) without
+   * unzipping GPS data.
+   *
+   * - An array (possibly empty) when the recording carries an `h3Cells` field.
+   *   An empty array means the recording genuinely had no GPS coverage.
+   * - `undefined` for legacy recordings that predate the field — the browser
+   *   backfills these in memory from the GPS path (see `recording-index.ts`).
+   */
+  h3Cells?: readonly string[];
 }
 
 /**
@@ -213,6 +225,22 @@ const METADATA_SCAN_CONCURRENCY = 4;
  * @param rootHandle - FileSystemDirectoryHandle from showDirectoryPicker()
  * @returns Discovery result with scenario→sessions map and sorted scenario names
  */
+/**
+ * Defensively parse the `h3Cells` field read from a recording's `session.json`.
+ *
+ * Returns an array of valid-looking H3 id strings when the field is present and
+ * well-formed (an array whose entries are all strings), or `undefined` when the
+ * field is absent (legacy recording) or malformed. Non-string entries are
+ * dropped rather than trusted — the metadata comes from a file on disk and must
+ * not be assumed well-formed (defensive boundary per CLAUDE.md).
+ */
+function parseH3Cells(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.filter((c): c is string => typeof c === 'string');
+}
+
 export async function discoverScenariosFromZipMetadata(
   rootHandle: FileSystemDirectoryHandle
 ): Promise<ZipMetadataDiscoveryResult> {
@@ -267,10 +295,12 @@ export async function discoverScenariosFromZipMetadata(
       scenarioName = DEFAULT_SCENARIO;
     }
 
+    const h3Cells = parseH3Cells(metadata?.h3Cells);
     const entry: SessionEntry = {
       filename: name,
       fileHandle: handle,
       date: parseDateFromSessionFilename(name),
+      ...(h3Cells !== undefined ? { h3Cells } : {}),
     };
 
     const existing = scenarioSessions.get(scenarioName);

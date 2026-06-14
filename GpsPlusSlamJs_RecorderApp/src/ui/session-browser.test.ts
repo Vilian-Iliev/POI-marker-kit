@@ -512,6 +512,38 @@ describe('discoverScenariosFromZipMetadata', () => {
     expect(sessions[0].fileHandle.kind).toBe('file');
   });
 
+  it('attaches h3Cells from session.json metadata to each entry', async () => {
+    // Why: the map-centric browser (Step 3 / D2) reads the per-tour coverage
+    // index straight from session.json during discovery, so it can place a tour
+    // without unzipping its GPS data. The discovered entry must carry h3Cells.
+    const cells = ['8b1fa1da1d64fff', '8b1fa1da1d4afff', '8b1fa1da1c09fff'];
+    const testZip = await produceTestZip({
+      scenarioName: 'Covered',
+      h3Cells: cells,
+    });
+    const root = new MockFSDirectoryHandle('Recordings');
+    root.addFile('2026-03-01_09-08-48utc.zip', testZip.zipData);
+
+    const result = await discoverScenariosFromZipMetadata(root);
+
+    const entry = result.scenarioSessions.get('Covered')![0]!;
+    expect(entry.h3Cells).toEqual(cells);
+  });
+
+  it('leaves h3Cells undefined for legacy recordings without the field', async () => {
+    // Why: recordings made before the coverage index existed have no h3Cells.
+    // Discovery must leave the field undefined so the browser knows to backfill
+    // from the GPS path rather than treating it as "no coverage".
+    const testZip = await produceTestZip({ scenarioName: 'Legacy' }); // no h3Cells
+    const root = new MockFSDirectoryHandle('Recordings');
+    root.addFile('2026-03-01_09-08-48utc.zip', testZip.zipData);
+
+    const result = await discoverScenariosFromZipMetadata(root);
+
+    const entry = result.scenarioSessions.get('Legacy')![0]!;
+    expect(entry.h3Cells).toBeUndefined();
+  });
+
   it('groups multiple zips by their scenarioName from metadata', async () => {
     // Why: A folder may contain multiple zips from different scenarios.
     // The function must group them correctly by the scenarioName in session.json.
