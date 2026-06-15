@@ -124,6 +124,13 @@ export {
   createBarcodeDetectorFrontEnd,
 } from './qr-frontend.js';
 
+// --- qr-frame-source (B2 — throttled RGBA capturer for QR detection) ---
+export {
+  type QrFrameSourceConfig,
+  type QrFrameSourceCallbacks,
+  QrFrameSource,
+} from './qr-frame-source.js';
+
 // --- opencv-pnp ---
 export { type CvMat, type CvLike, OpenCvPnpSquare } from './opencv-pnp.js';
 

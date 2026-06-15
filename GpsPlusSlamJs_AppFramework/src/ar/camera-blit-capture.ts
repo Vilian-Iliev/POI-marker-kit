@@ -248,6 +248,38 @@ export class CameraBlitCapture {
   }
 
   /**
+   * Capture the camera texture as **top-left-origin** RGBA — the orientation
+   * QR detection (and `BarcodeDetector`) expects — returning a FRESH copy that
+   * is safe to retain beyond the next capture.
+   *
+   * This is the efficient replacement for the demo's old JPEG round-trip: blit
+   * + readback (shared with {@link captureToBlob} / {@link captureToPixels}),
+   * then the same vertical flip the JPEG encoder applies, but with no encode →
+   * decode. Unlike {@link captureToPixels} (which returns the reusable internal
+   * buffer in WebGL bottom-row-first order), this returns an owned,
+   * correctly-oriented `Uint8ClampedArray`.
+   *
+   * IMPORTANT: Must be called within the XR animation frame callback, while the
+   * camera texture is valid.
+   *
+   * @returns `{ data, width, height }` (top-left RGBA), or null on
+   *   failure/dispose.
+   */
+  captureToRgba(
+    renderer: THREE.WebGLRenderer,
+    cameraTexture: THREE.Texture
+  ): { data: Uint8ClampedArray; width: number; height: number } | null {
+    if (!this.captureToPixels(renderer, cameraTexture)) {
+      return null;
+    }
+    return {
+      data: this.flippedPixelCopy(),
+      width: this.width,
+      height: this.height,
+    };
+  }
+
+  /**
    * Check if a pixel buffer is entirely black (all zeros).
    * Uses sampling for performance (checks BLACK_CHECK_SAMPLE_COUNT evenly-spaced pixels).
    *
@@ -292,13 +324,23 @@ export class CameraBlitCapture {
   }
 
   private getFlippedImageData(): ImageData {
-    // The ImageData constructor requires a Uint8ClampedArray. This also creates a copy.
-    const clampedBuffer = new Uint8ClampedArray(this.pixelBuffer);
-    const imageData = new ImageData(clampedBuffer, this.width, this.height);
+    // flippedPixelCopy() already returns an owned, top-left-origin copy.
+    return new ImageData(this.flippedPixelCopy(), this.width, this.height);
+  }
 
-    // WebGL readPixels returns y-flipped data; flip it in-place.
-    this.flipImageDataVertically(imageData);
-    return imageData;
+  /**
+   * Produce a FRESH, top-left-origin RGBA copy of the internal readback buffer.
+   * WebGL `readPixels` returns bottom-row-first; this copies (so the internal
+   * buffer stays y-flipped for a subsequent capture) and swaps rows. Shared by
+   * the JPEG encode path ({@link getFlippedImageData}) and {@link captureToRgba}.
+   */
+  private flippedPixelCopy(): Uint8ClampedArray<ArrayBuffer> {
+    // Copy into a fresh, plain-ArrayBuffer-backed buffer (not ArrayBufferLike)
+    // so the result is accepted by both `ImageData` and `RgbaImage.data`.
+    const copy = new Uint8ClampedArray(this.pixelBuffer.length);
+    copy.set(this.pixelBuffer);
+    this.flipRowsVertically(copy, this.width, this.height);
+    return copy;
   }
 
   private async pixelsToJpegViaOffscreenCanvas(
@@ -335,11 +377,15 @@ export class CameraBlitCapture {
   }
 
   /**
-   * Flip ImageData vertically in-place.
-   * WebGL readPixels returns bottom-row-first; canvas expects top-row-first.
+   * Flip an RGBA buffer vertically in-place (row swap).
+   * WebGL readPixels returns bottom-row-first; canvas / detectors expect
+   * top-row-first.
    */
-  private flipImageDataVertically(imageData: ImageData): void {
-    const { data, width, height } = imageData;
+  private flipRowsVertically(
+    data: Uint8ClampedArray,
+    width: number,
+    height: number
+  ): void {
     const rowSize = width * 4;
     const tempRow = new Uint8ClampedArray(rowSize);
     for (let y = 0; y < Math.floor(height / 2); y++) {

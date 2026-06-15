@@ -330,6 +330,73 @@ describe('camera-blit-capture', () => {
       });
     });
 
+    describe('captureToRgba', () => {
+      /**
+       * Why this test matters (B2 / QR detection):
+       * QR detection needs top-left-origin RGBA without the lossy JPEG
+       * round-trip. captureToRgba must run the blit, then apply the SAME
+       * vertical flip the JPEG encoder uses (readPixels is bottom-row-first),
+       * and return an OWNED copy (not the internal y-flipped buffer).
+       */
+      it('returns a flipped (top-left) owned RGBA copy', () => {
+        const renderer = createMockRenderer();
+        renderer.readRenderTargetPixels.mockImplementation(
+          (
+            _rt: unknown,
+            _x: number,
+            _y: number,
+            _w: number,
+            _h: number,
+            buffer: Uint8Array
+          ) => {
+            // 2×2, bottom-row-first:
+            //  row0(bottom): [10,20,30,255, 40,50,60,255]
+            //  row1(top):    [70,80,90,255, 100,110,120,255]
+            buffer.set([
+              10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120,
+              255,
+            ]);
+          }
+        );
+
+        blitCapture = new CameraBlitCapture({ width: 2, height: 2 });
+        const rgba = blitCapture.captureToRgba(
+          renderer as never,
+          mockTexture as never
+        );
+
+        expect(rgba).not.toBeNull();
+        expect(rgba!.width).toBe(2);
+        expect(rgba!.height).toBe(2);
+        expect(rgba!.data).toBeInstanceOf(Uint8ClampedArray);
+        // Flipped: new row0 = old top row, new row1 = old bottom row.
+        expect(Array.from(rgba!.data)).toEqual([
+          70, 80, 90, 255, 100, 110, 120, 255, 10, 20, 30, 255, 40, 50, 60, 255,
+        ]);
+      });
+
+      it('returns null after dispose', () => {
+        blitCapture = new CameraBlitCapture({ width: 4, height: 4 });
+        blitCapture.dispose();
+        expect(
+          blitCapture.captureToRgba(mockRenderer as never, mockTexture as never)
+        ).toBeNull();
+      });
+
+      it('returns an independent copy that survives the next capture', () => {
+        blitCapture = new CameraBlitCapture({ width: 2, height: 2 });
+        const first = blitCapture.captureToRgba(
+          mockRenderer as never,
+          mockTexture as never
+        );
+        expect(first).not.toBeNull();
+        const snapshot = Array.from(first!.data);
+        // A second capture must not mutate the first result's buffer.
+        blitCapture.captureToRgba(mockRenderer as never, mockTexture as never);
+        expect(Array.from(first!.data)).toEqual(snapshot);
+      });
+    });
+
     describe('isBlack helper', () => {
       beforeEach(() => {
         blitCapture = new CameraBlitCapture({ width: 4, height: 4 });

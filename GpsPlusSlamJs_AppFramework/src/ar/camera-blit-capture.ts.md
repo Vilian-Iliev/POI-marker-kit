@@ -11,6 +11,7 @@ Background: `docs/2026-02-06-bug-camera-frames-black.md`; RGB path: `GpsPlusSlam
 - **`new CameraBlitCapture(config?)`** — `{ width, height }` of the intermediate target (default 512×512). Allocates the render target, shader quad and CPU pixel buffer once.
 - **`captureToBlob(renderer, cameraTexture, quality): Promise<Blob | null>`** — blit + readback + JPEG encode (y-flip applied during encode). Null on failure/dispose.
 - **`captureToPixels(renderer, cameraTexture): { pixels, width, height } | null`** — blit + readback only (steps A+B, shared with `captureToBlob`), returning the raw RGBA buffer for cheap per-point sampling (Iter 8). The returned `pixels` is the INTERNAL buffer — valid until the next capture or `resizeIfNeeded`; consume synchronously (e.g. `createRgbLookup`) or copy. Buffer is WebGL readback order (bottom-row-first). Null on failure/dispose, never throws.
+- **`captureToRgba(renderer, cameraTexture): { data: Uint8ClampedArray, width, height } | null`** — blit + readback + vertical flip, returning a FRESH, **top-left-origin** RGBA copy (safe to retain past the next capture). The efficient, lossless replacement for the QR demo's old JPEG→`OffscreenCanvas`→`getImageData` round-trip (B2). Use this to feed `BarcodeDetector`/OpenCV. Null on failure/dispose.
 - **`resizeIfNeeded(width, height): boolean`** — re-sizes target + buffer; no-op when unchanged/invalid/disposed.
 - **`getWidth(): number` / `getHeight(): number`** — current render-target dimensions. These equal the encoded JPEG's pixel size (the encode canvas is sized to the render target), so `webxr-session` reads them after `captureToBlob` to persist each captured frame's true width/height for aspect-correct frame-tile rendering (D1 of `2026-06-13-frame-tile-rendering-bugs-user-feedback.md`) without decoding the blob.
 - **`CameraBlitCapture.isBlackFrame(pixels): boolean`** — sampled all-zero check (blit-failed detection vs. dark scene).
@@ -36,5 +37,5 @@ blit.dispose(); // on session teardown
 
 ## Tests
 
-- `camera-blit-capture.test.ts` — blob pipeline (blit → readPixels → JPEG), renderer-state restore, black-frame handling, `captureToPixels` (buffer + dimensions, state restore, throw → null, dispose → null), resize and dispose paths.
+- `camera-blit-capture.test.ts` — blob pipeline (blit → readPixels → JPEG), renderer-state restore, black-frame handling, `captureToPixels` (buffer + dimensions, state restore, throw → null, dispose → null), `captureToRgba` (top-left flip, owned copy survives next capture, dispose → null), resize and dispose paths.
 - `camera-blit-capture.property.test.ts` — `computeCaptureSize` clamping/fallback properties.
