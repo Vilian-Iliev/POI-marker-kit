@@ -20,6 +20,7 @@ import {
   selectLatestQrDetection,
   selectQrMarker,
   selectQrSize,
+  selectResolvedQrSizeM,
   medianQrPosition,
   DEFAULT_QR_MAX_HISTORY,
   type QrDetectedState,
@@ -145,6 +146,49 @@ describe('qrDetectedReducer', () => {
     expect(selectQrSize({ qrDetected: s }, 'A')?.status).toBe('estimated');
     // The detection history is preserved across a size update.
     expect(selectQrMarker({ qrDetected: s }, 'A')?.detections).toHaveLength(1);
+  });
+
+  // The resolveSizeM bridge for the vote (Part B, Option a): only an
+  // 'estimated' size resolves to a number; everything else stays null so the
+  // controller keeps scanning rather than voting on an unconverged size.
+  it('selectResolvedQrSizeM: null until estimated, then the median (Part B Option a)', () => {
+    let s = init();
+    // Unknown marker → null (keep scanning).
+    expect(selectResolvedQrSizeM({ qrDetected: s }, 'A')).toBeNull();
+
+    s = qrDetectedReducer(s, recordQrDetection(entry('A', 1)));
+    // status 'unknown' → still null.
+    expect(selectResolvedQrSizeM({ qrDetected: s }, 'A')).toBeNull();
+
+    // status 'measuring' (not yet converged) → still null.
+    s = qrDetectedReducer(
+      s,
+      recordQrSizeEstimate({
+        text: 'A',
+        estimate: {
+          status: 'measuring',
+          estimateM: 0.19,
+          sampleCount: 3,
+          spreadM: 0.05,
+        },
+      })
+    );
+    expect(selectResolvedQrSizeM({ qrDetected: s }, 'A')).toBeNull();
+
+    // status 'estimated' → the running-median estimateM.
+    s = qrDetectedReducer(
+      s,
+      recordQrSizeEstimate({
+        text: 'A',
+        estimate: {
+          status: 'estimated',
+          estimateM: 0.2,
+          sampleCount: 12,
+          spreadM: 0.004,
+        },
+      })
+    );
+    expect(selectResolvedQrSizeM({ qrDetected: s }, 'A')).toBe(0.2);
   });
 
   it('size can be authored before any detection exists', () => {

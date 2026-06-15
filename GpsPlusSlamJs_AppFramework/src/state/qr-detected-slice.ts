@@ -251,6 +251,32 @@ export function selectQrSize(
   return state.qrDetected.markers[text]?.size;
 }
 
+/**
+ * Resolve a marker's measured size for the high-weight GPS vote
+ * (framework-wiring-options Part B, Option a). Returns the running-median
+ * `estimateM` ONCE the size lifecycle reports `'estimated'`, else `null` ("keep
+ * scanning"). This is the bridge an app injects as the QR controller's
+ * `resolveSizeM`, so a size-less-but-geo level votes the moment the slice
+ * converges — **without** the `ar` controller ever importing the slice (which
+ * would close the `ar → state` cycle):
+ *
+ * ```ts
+ * resolveSizeM: (text) => selectResolvedQrSizeM(store.getState(), text),
+ * ```
+ *
+ * Per the Note 3 decision (confirmed) a reliably-estimated *measured* size
+ * drives the vote under the *same* gate as an authored size — no extra
+ * size-specific bar — because the §7 occupancy + reprojection + RANSAC
+ * backstops already bound a bad read.
+ */
+export function selectResolvedQrSizeM(
+  state: RootWithQrDetected,
+  text: string
+): number | null {
+  const size = state.qrDetected.markers[text]?.size;
+  return size?.status === 'estimated' ? size.estimateM : null;
+}
+
 // --- Derived helpers ---------------------------------------------------
 
 /** Per-axis median of a numeric list (returns the lower-middle for even n). */

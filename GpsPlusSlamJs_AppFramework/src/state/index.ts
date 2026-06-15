@@ -58,6 +58,7 @@ export {
   selectQrMarker,
   selectLatestQrDetection,
   selectQrSize,
+  selectResolvedQrSizeM,
   medianQrPosition,
 } from './qr-detected-slice.js';
 

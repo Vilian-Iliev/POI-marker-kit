@@ -12,7 +12,8 @@ Framework-level Redux slice that stores **what was detected, where, in 3D**, key
   - `QrSizeEstimate = { status: 'unknown'|'measuring'|'estimated', estimateM, sampleCount, spreadM }` — the Note 3 size lifecycle.
 - **Actions**: `recordQrDetection(entry)`, `recordQrSizeEstimate({ text, estimate })`, `pruneQrDetections({ text, count })`, `clearQrMarker({ text })`, `clearAllQrMarkers()`, `setQrMaxHistory(n)`.
 - **Reducer**: `qrDetectedReducer`.
-- **Selectors**: `selectQrMarkers`, `selectQrMarker(state, text)`, `selectLatestQrDetection(state, text)`, `selectQrSize(state, text)` — over the minimal `RootWithQrDetected` shape.
+- **Selectors**: `selectQrMarkers`, `selectQrMarker(state, text)`, `selectLatestQrDetection(state, text)`, `selectQrSize(state, text)`, `selectResolvedQrSizeM(state, text)` — over the minimal `RootWithQrDetected` shape.
+  - `selectResolvedQrSizeM` returns the running-median `estimateM` once the size lifecycle is `'estimated'`, else `null`. It is the **vote bridge** (framework-wiring-options Part B, Option a): an app injects it as the QR controller's `resolveSizeM` — `resolveSizeM: (text) => selectResolvedQrSizeM(store.getState(), text)` — so a measured size drives the high-weight vote the moment it converges, without the `ar` controller importing this slice (which would close the `ar → state` cycle).
 - **Derived helper**: `medianQrPosition(entries)` → robust per-axis median world position (or `null`).
 - **Constant**: `DEFAULT_QR_MAX_HISTORY = 32`.
 
