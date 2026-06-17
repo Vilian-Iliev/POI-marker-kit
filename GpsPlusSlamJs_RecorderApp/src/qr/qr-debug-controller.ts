@@ -4,12 +4,18 @@
  * Subscribes (via `update()` called on every store change) to the recorder's
  * `qrDetected` slice and renders, per marker, the shared debug axis+cube
  * ({@link createQrDebugView}) under `arWorldGroup` at the **derived** best-effort
- * pose+size ({@link selectDerivedQrPlacement}). It owns the as-of depth resolver:
- * every new `recording.latestDepthSample` is fed to it, so the size join is
- * reproducible — the controller runs IDENTICALLY live and on replay because it
- * only reads the store. Replaying a raw recording with a different size/PnP
- * algorithm therefore shows the new placement (the maintainer's re-test goal,
- * visualised).
+ * pose+size. It owns the as-of depth resolver: every new
+ * `recording.latestDepthSample` is fed to it, so the size join is reproducible —
+ * the controller runs IDENTICALLY live and on replay because it only reads the
+ * store. Replaying a raw recording with a different size/PnP algorithm therefore
+ * shows the new placement (the maintainer's re-test goal, visualised).
+ *
+ * **Incremental derivation (perf-degradation fix, open topic D):** the placement
+ * is derived via the stateful {@link createIncrementalQrPlacement} — it folds in
+ * only NEW observations per marker (O(1) per detection) and memoizes when nothing
+ * new arrived — NOT the stateless `selectDerivedQrPlacement`, which replays the
+ * whole history on every store action (O(history)/action) and ramped the recorder
+ * framerate down on device once the per-marker ring filled.
  *
  * Best-effort: a marker that cannot be sized yet (coarse occupancy depth) renders
  * NOTHING rather than throwing, and a transient miss does NOT clear an existing
@@ -34,13 +40,15 @@ import {
   type QrDebugView,
 } from 'gps-plus-slam-app-framework/ar/qr-debug-view';
 import { PlanarPnpSquare } from 'gps-plus-slam-app-framework/ar/planar-pnp';
-import type {
-  DerivedQrPlacement,
-  DeriveQrPoseDeps,
+import {
+  createIncrementalQrPlacement,
+  type DeriveQrPoseDeps,
+  type IncrementalQrPlacement,
+  type RawQrObservation,
 } from 'gps-plus-slam-app-framework/ar/qr-derived-pose';
 import type { SolvePnpSquare } from 'gps-plus-slam-app-framework/ar/qr-pose';
 import {
-  selectDerivedQrPlacement,
+  selectQrRawObservations,
   type QrDetectedState,
 } from 'gps-plus-slam-app-framework/state/qr-detected-slice';
 import type { DepthSample } from 'gps-plus-slam-app-framework/types/ar-types';
@@ -66,12 +74,17 @@ export interface QrDebugControllerDeps {
   solver?: SolvePnpSquare;
   /** Debug-view factory (default {@link createQrDebugView}) — overridable in tests. */
   createView?: (parent: Object3D) => QrDebugView;
-  /** Placement selector (default {@link selectDerivedQrPlacement}) — overridable in tests. */
-  selectPlacement?: (
+  /**
+   * Incremental placement deriver (default {@link createIncrementalQrPlacement})
+   * — overridable in tests. Stateful: folds new observations per marker (O(1) per
+   * detection) and memoizes when nothing new arrived.
+   */
+  deriver?: IncrementalQrPlacement;
+  /** Map a marker's stored entries to raw observations (default {@link selectQrRawObservations}). */
+  selectObservations?: (
     state: QrDebugControllerState,
-    text: string,
-    deps: DeriveQrPoseDeps
-  ) => DerivedQrPlacement | null;
+    text: string
+  ) => RawQrObservation[];
   /** Size-measurer tuning forwarded to the derive layer. */
   sizeOptions?: DeriveQrPoseDeps['sizeOptions'];
   /** Reprojection-error gate forwarded to the derive layer. */
@@ -91,7 +104,7 @@ export function createQrDebugController(
   const resolver = deps.resolver ?? createQrDepthResolver();
   const solver = deps.solver ?? new PlanarPnpSquare();
   const createView = deps.createView ?? createQrDebugView;
-  const selectPlacement = deps.selectPlacement ?? selectDerivedQrPlacement;
+  const selectObservations = deps.selectObservations ?? selectQrRawObservations;
 
   const deriveDeps: DeriveQrPoseDeps = {
     resolveDepthAt: (t) => resolver.resolveDepthAt(t),
@@ -101,6 +114,8 @@ export function createQrDebugController(
       ? { maxReprojectionErrorPx: deps.maxReprojectionErrorPx }
       : {}),
   };
+  // ONE persistent deriver across update() calls (the incremental state lives here).
+  const deriver = deps.deriver ?? createIncrementalQrPlacement(deriveDeps);
 
   const views = new Map<string, QrDebugView>();
   let lastSample: DepthSample | null = null;
@@ -116,21 +131,25 @@ export function createQrDebugController(
       resolver.append(sample);
     }
 
-    // 2) Drop views whose marker left the store (clearQrMarker / clearAllQrMarkers).
+    // 2) Drop views whose marker left the store (clearQrMarker / clearAllQrMarkers)
+    //    and clear that marker's accumulated derive state so a re-appearance starts
+    //    fresh (and the measurer doesn't retain stale size for a reused payload).
     const markers = state.qrDetected.markers;
     for (const text of [...views.keys()]) {
       if (!(text in markers)) {
         views.get(text)!.dispose();
         views.delete(text);
+        deriver.reset(text);
       }
     }
 
     // 3) Render each marker's best-effort derived placement. Needs arWorldGroup;
-    //    until AR starts we still kept depth history above.
+    //    until AR starts we still kept depth history above. The deriver folds only
+    //    NEW observations (O(1)/detection) and memoizes when nothing changed.
     const parent = deps.getArWorldGroup();
     if (!parent) return;
     for (const text of Object.keys(markers)) {
-      const placement = selectPlacement(state, text, deriveDeps);
+      const placement = deriver.update(text, selectObservations(state, text));
       // Not sizeable yet (or PnP-rejected) → render nothing; a prior view keeps
       // its last pose (persistence) rather than being cleared on a transient miss.
       if (!placement) continue;

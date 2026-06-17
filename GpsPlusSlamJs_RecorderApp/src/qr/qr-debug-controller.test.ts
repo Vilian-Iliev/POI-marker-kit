@@ -15,6 +15,8 @@ import type { Object3D } from 'three';
 import type { Pose } from 'gps-plus-slam-app-framework/ar';
 import type {
   DerivedQrPlacement,
+  IncrementalQrPlacement,
+  RawQrObservation,
   QrDebugView,
 } from 'gps-plus-slam-app-framework/ar';
 import type {
@@ -29,6 +31,27 @@ import {
 } from './qr-debug-controller';
 
 const pose: Pose = { position: [1, 2, 3], rotation: [0, 0, 0, 1] };
+
+/**
+ * A fake incremental deriver: `update` returns whatever `fn` decides per call,
+ * and `reset` records which markers were reset (so the dispose path can be
+ * asserted). The real deriver's fold/memo math is covered by the framework tests.
+ */
+function fakeDeriver(
+  fn: (
+    text: string,
+    observations: readonly RawQrObservation[]
+  ) => DerivedQrPlacement | null
+): IncrementalQrPlacement & { resets: string[] } {
+  const resets: string[] = [];
+  return {
+    update: (text, observations) => fn(text, observations),
+    reset: (text) => {
+      resets.push(text);
+    },
+    resets,
+  };
+}
 
 /** A fake debug view that records update/dispose calls. */
 function fakeView(): {
@@ -115,12 +138,32 @@ describe('createQrDebugController', () => {
         views.push(v);
         return v.view;
       },
-      selectPlacement: () => placement,
+      deriver: fakeDeriver(() => placement),
     });
 
     controller.update();
     expect(views).toHaveLength(1);
     expect(views[0]!.updates).toEqual([[pose, 0.2]]);
+  });
+
+  it('feeds the marker raw observations (selectObservations) into the deriver', () => {
+    const sentinel = [
+      { text: 'm', timestamp: 1 },
+    ] as unknown as readonly RawQrObservation[];
+    let received: readonly RawQrObservation[] | undefined;
+    const controller = createQrDebugController({
+      getState: () => makeState(['m']),
+      getArWorldGroup: () => fakeArGroup,
+      createView: () => fakeView().view,
+      selectObservations: () => sentinel as RawQrObservation[],
+      deriver: fakeDeriver((_text, observations) => {
+        received = observations;
+        return { pose, sizeM: 0.2 };
+      }),
+    });
+
+    controller.update();
+    expect(received).toBe(sentinel);
   });
 
   it('renders nothing (no view, no throw) when a marker is not sizeable yet', () => {
@@ -133,7 +176,7 @@ describe('createQrDebugController', () => {
         views.push(v);
         return v.view;
       },
-      selectPlacement: () => null, // not sizeable
+      deriver: fakeDeriver(() => null), // not sizeable
     });
 
     expect(() => controller.update()).not.toThrow();
@@ -151,7 +194,7 @@ describe('createQrDebugController', () => {
         views.push(v);
         return v.view;
       },
-      selectPlacement: () => (sizeable ? { pose, sizeM: 0.2 } : null),
+      deriver: fakeDeriver(() => (sizeable ? { pose, sizeM: 0.2 } : null)),
     });
 
     controller.update(); // sizeable → view created + updated
@@ -163,9 +206,12 @@ describe('createQrDebugController', () => {
     expect(views[0]!.disposed).toBe(0);
   });
 
-  it('disposes a view when its marker leaves the store', () => {
+  it('disposes a view + resets the deriver when its marker leaves the store', () => {
     const views: ReturnType<typeof fakeView>[] = [];
     let texts = ['m'];
+    const deriver = fakeDeriver((text) =>
+      text === 'm' ? { pose, sizeM: 0.2 } : null
+    );
     const controller = createQrDebugController({
       getState: () => makeState(texts),
       getArWorldGroup: () => fakeArGroup,
@@ -174,8 +220,7 @@ describe('createQrDebugController', () => {
         views.push(v);
         return v.view;
       },
-      selectPlacement: (_s, text) =>
-        text === 'm' ? { pose, sizeM: 0.2 } : null,
+      deriver,
     });
 
     controller.update(); // creates the 'm' view
@@ -183,6 +228,9 @@ describe('createQrDebugController', () => {
     controller.update();
 
     expect(views[0]!.disposed).toBe(1);
+    // The marker's accumulated derive state must be cleared too (no stale size
+    // if the same payload reappears).
+    expect(deriver.resets).toContain('m');
   });
 
   it('feeds the depth resolver even before AR starts (no arWorldGroup yet)', () => {
@@ -192,7 +240,7 @@ describe('createQrDebugController', () => {
       getState: () => makeState(['m'], sample),
       getArWorldGroup: () => null, // AR not started
       resolver,
-      selectPlacement: () => ({ pose, sizeM: 0.2 }),
+      deriver: fakeDeriver(() => ({ pose, sizeM: 0.2 })),
       createView: () => fakeView().view,
     });
 
@@ -227,7 +275,7 @@ describe('createQrDebugController', () => {
         views.push(v);
         return v.view;
       },
-      selectPlacement: () => ({ pose, sizeM: 0.2 }),
+      deriver: fakeDeriver(() => ({ pose, sizeM: 0.2 })),
     });
 
     controller.update(); // two views

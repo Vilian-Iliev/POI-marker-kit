@@ -19,8 +19,9 @@ maintainer's re-test goal, visualised).
   - `deps.getArWorldGroup()` — parent for debug objects (`null` until AR starts).
   - Optional seams (defaults in parens, overridable in tests): `resolver`
     (`createQrDepthResolver`), `solver` (`PlanarPnpSquare`), `createView`
-    (`createQrDebugView`), `selectPlacement` (`selectDerivedQrPlacement`),
-    `sizeOptions`, `maxReprojectionErrorPx`.
+    (`createQrDebugView`), `deriver` (`createIncrementalQrPlacement`),
+    `selectObservations` (`selectQrRawObservations`), `sizeOptions`,
+    `maxReprojectionErrorPx`.
   - `update()` — reconcile views with the current state (call per store change).
   - `dispose()` — tear down all views + reset the resolver.
 
@@ -31,8 +32,13 @@ maintainer's re-test goal, visualised).
   the history is complete by the time AR starts.
 - **Best-effort:** a marker that cannot be sized yet renders nothing (no throw); a
   transient miss does NOT clear an existing view (persistence across throttled
-  detections). Views are disposed only when their marker leaves the store
-  (`clearQrMarker` / `clearAllQrMarkers`).
+  detections). Views are disposed (and the deriver's per-marker state `reset`) only
+  when their marker leaves the store (`clearQrMarker` / `clearAllQrMarkers`).
+- **Incremental, not full-replay (perf-degradation fix):** placement comes from a
+  persistent `createIncrementalQrPlacement` that folds only NEW observations per
+  marker (O(1)/detection) and memoizes when nothing new arrived — NOT
+  `selectDerivedQrPlacement` (O(history) per store action), which ramped the
+  recorder framerate down on device. See [open topic D](../../../../gps-plus-slam/GpsPlusSlamJs_Docs/docs/2026-06-18-followup-recorder-live-qr-perf-degradation.md).
 - **No self-subscription:** the controller never subscribes; `main.ts` calls
   `update()` from its existing store subscription (live) and replay drives the
   same store, so one wiring covers both.
