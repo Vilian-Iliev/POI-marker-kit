@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { cellToParent, isValidCell } from 'h3-js';
+import { cellToParent, cellToLatLng, isValidCell } from 'h3-js';
 import {
   H3_RESOLUTION,
   gpsPathToCoverageCells,
@@ -25,8 +25,24 @@ import {
   toursAtTile,
   matchesNameFilter,
   filterRecordingsByName,
+  coverageCellLatLngs,
 } from './map-browser-index';
 import type { RecordingCoverage } from './recording-index';
+
+/** Build a RecordingCoverage from an explicit (possibly invalid) cell list. */
+function recWithCells(filename: string, cells: string[]): RecordingCoverage {
+  return {
+    entry: {
+      filename,
+      fileHandle: {} as unknown as FileSystemFileHandle,
+      date: null,
+      h3Cells: cells,
+    },
+    scenario: 'S',
+    cells,
+    backfilled: false,
+  };
+}
 
 /** Build a minimal RecordingCoverage from a filename and a GPS path. */
 function rec(
@@ -139,6 +155,55 @@ describe('buildTileIndex', () => {
   it('toursAtTile returns an empty array for an unknown tile', () => {
     const index = buildTileIndex([rec('a.zip', [A])], H3_RESOLUTION);
     expect(toursAtTile(index, 'nope')).toEqual([]);
+  });
+});
+
+describe('coverageCellLatLngs', () => {
+  // A 16-hex-digit string that parses as an H3 index but is NOT a valid cell.
+  // h3-js's cellToLatLng THROWS on this (code 5), unlike non-hex garbage which
+  // it silently maps to bogus coordinates — both have isValidCell === false.
+  const THROWING_INVALID_CELL = 'ffffffffffffffff';
+
+  /**
+   * Why this matters: `RecordingCoverage.cells` are read VERBATIM from a
+   * recording's `session.json` `h3Cells` field (`loadCoverageCellsForEntry`)
+   * and are never validated as real H3 indices. A corrupt/tampered file can
+   * therefore put an arbitrary string into `cells`, and `cellToLatLng` THROWS
+   * on such an index — this asserts that underlying hazard so the guard below
+   * has a documented reason to exist.
+   */
+  it('cellToLatLng throws on an invalid cell (the hazard being guarded)', () => {
+    expect(isValidCell(THROWING_INVALID_CELL)).toBe(false);
+    expect(() => cellToLatLng(THROWING_INVALID_CELL)).toThrow();
+  });
+
+  it('skips invalid cells instead of throwing, mirroring clusterCellsByZoom', () => {
+    const validCell = gpsPathToCoverageCells([A])[0]!;
+    const recording = recWithCells('corrupt.zip', [
+      THROWING_INVALID_CELL,
+      validCell,
+    ]);
+
+    // Without the isValidCell skip this would throw (proven above) and crash
+    // the whole map browser's fit-to-coverage. It must instead drop the bad
+    // cell and still frame to the valid one.
+    const coords = coverageCellLatLngs([recording]);
+
+    const [lat, lng] = cellToLatLng(validCell);
+    expect(coords).toEqual([[lat, lng]]);
+  });
+
+  it('collects the coordinates of every valid cell across all recordings', () => {
+    const recs = [rec('a.zip', [A, B]), rec('b.zip', [C])];
+    const coords = coverageCellLatLngs(recs);
+    const expected = [...recs[0]!.cells, ...recs[1]!.cells].map((c) =>
+      cellToLatLng(c)
+    );
+    expect(coords).toEqual(expected);
+  });
+
+  it('returns an empty array when no recording carries cells', () => {
+    expect(coverageCellLatLngs([recWithCells('empty.zip', [])])).toEqual([]);
   });
 });
 

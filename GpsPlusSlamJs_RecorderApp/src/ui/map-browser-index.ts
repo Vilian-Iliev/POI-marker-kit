@@ -14,6 +14,7 @@
  * @see GpsPlusSlamJs_Docs/docs/2026-06-14-map-centric-recording-browser-and-h3-index-user-feedback.md (D3/D5)
  */
 
+import { cellToLatLng, isValidCell } from 'h3-js';
 import {
   H3_RESOLUTION,
   clusterCellsByZoom,
@@ -84,6 +85,34 @@ export function buildTileIndex(
     res = H3_RESOLUTION;
   }
   return { res, tilesToRecordings };
+}
+
+/**
+ * Collect the `[lat, lng]` coordinates of every coverage cell across the given
+ * recordings, for framing the map to coverage (`fitToCoverage`).
+ *
+ * `RecordingCoverage.cells` are read verbatim from each recording's
+ * `session.json` `h3Cells` field and are never validated upstream, so a
+ * corrupt/tampered file can carry an invalid H3 index. `cellToLatLng` throws on
+ * some such indices (e.g. an all-`f` hex string) and silently maps others to
+ * bogus coordinates — both fail `isValidCell`. We therefore skip invalid cells,
+ * mirroring `clusterCellsByZoom`'s own `isValidCell` guard, so one bad cell
+ * neither crashes the fit nor drags the bounds to a bogus location.
+ */
+export function coverageCellLatLngs(
+  recordings: readonly RecordingCoverage[]
+): [number, number][] {
+  const coords: [number, number][] = [];
+  for (const recording of recordings) {
+    for (const cell of recording.cells) {
+      if (!isValidCell(cell)) {
+        continue;
+      }
+      const [lat, lng] = cellToLatLng(cell);
+      coords.push([lat, lng]);
+    }
+  }
+  return coords;
 }
 
 /**

@@ -26,7 +26,7 @@
  */
 
 import L from 'leaflet';
-import { cellToBoundary, cellToLatLng } from 'h3-js';
+import { cellToBoundary } from 'h3-js';
 import { createLogger } from 'gps-plus-slam-app-framework/utils/logger';
 import { VIS_COLORS } from 'gps-plus-slam-app-framework/visualization/vis-colors';
 import { addOsmTileLayer, FIT_BOUNDS_PADDING } from './map-osm-base';
@@ -37,6 +37,7 @@ import {
   leafletZoomToH3Res,
   toursAtTile,
   filterRecordingsByName,
+  coverageCellLatLngs,
   type TileIndex,
 } from './map-browser-index';
 
@@ -325,11 +326,10 @@ export function createMapBrowser(
 
     function fitToCoverage(): void {
       const bounds = L.latLngBounds([]);
-      for (const recording of recordings) {
-        for (const cell of recording.cells) {
-          const [lat, lng] = cellToLatLng(cell);
-          bounds.extend([lat, lng]);
-        }
+      // coverageCellLatLngs skips invalid H3 cells (cellToLatLng throws on some
+      // corrupt indices) so one bad cell can't crash the fit — see its doc.
+      for (const [lat, lng] of coverageCellLatLngs(recordings)) {
+        bounds.extend([lat, lng]);
       }
       if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: FIT_BOUNDS_PADDING, maxZoom: 17 });

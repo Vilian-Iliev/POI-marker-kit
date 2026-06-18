@@ -12,6 +12,7 @@ See the plan: `GpsPlusSlamJs_Docs/docs/2026-06-14-map-centric-recording-browser-
 - `TileIndex` (interface) — `{ res: number; tilesToRecordings: ReadonlyMap<string, RecordingCoverage[]> }`. `res` is the clamped resolution all tile keys are at.
 - `buildTileIndex(recordings, targetRes): TileIndex` — cluster each recording's res-11 coverage to `targetRes` (via `clusterCellsByZoom`) and group recordings by tile. A recording appears at most once per tile.
 - `toursAtTile(index, tileCell): RecordingCoverage[]` — recordings crossing a tile, or `[]` for an unknown tile.
+- `coverageCellLatLngs(recordings): [number, number][]` — the `[lat, lng]` of every coverage cell across the recordings, for `fitToCoverage`. **Skips invalid H3 cells** (`isValidCell`) because `cells` are read verbatim from `session.json` and `cellToLatLng` throws on some corrupt indices — one bad cell must not crash the fit or drag the bounds to a bogus location.
 - `matchesNameFilter(filename, query): boolean` — case-insensitive substring match; empty/whitespace query matches everything.
 - `filterRecordingsByName(recordings, query): RecordingCoverage[]` — order-preserving subset of recordings whose filename matches.
 
@@ -34,5 +35,5 @@ const visible = filterRecordingsByName(recordings, searchQuery);
 
 ## Tests
 
-- `map-browser-index.test.ts` — worked examples for zoom→res clamping/monotonicity, tile grouping + shared-tile membership, resolution clamping, name-filter case-insensitivity and exact-filename narrowing.
+- `map-browser-index.test.ts` — worked examples for zoom→res clamping/monotonicity, tile grouping + shared-tile membership, resolution clamping, name-filter case-insensitivity and exact-filename narrowing, plus `coverageCellLatLngs` skipping a throwing invalid cell (`ffffffffffffffff`) while still collecting the valid ones.
 - `map-browser-index.property.test.ts` — invariants over generated recordings/zooms: zoom→res integer/clamped/monotonic; tile keys valid + membership sound + no double-count + completeness; name filter is an order-preserving subset with empty-query identity.
