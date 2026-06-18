@@ -141,6 +141,49 @@ describe('createQrDetectionScheduler', () => {
     expect(onMiss).toHaveBeenCalledTimes(1);
   });
 
+  it('recovers when detect throws SYNCHRONOUSLY (never wedges inFlight)', async () => {
+    // A detector can throw synchronously — before it ever returns a promise —
+    // e.g. a worker-transport wrapper that throws when the worker is dead, or a
+    // synchronous precondition check on a malformed frame. The scheduler sets
+    // inFlight=true *before* calling detect, so a synchronous throw that escapes
+    // offerFrame would leave inFlight stuck true forever, silently and
+    // permanently blocking ALL future detections. This pins that it instead
+    // routes to onError, clears inFlight, and stays usable.
+    let t = 0;
+    const onError = vi.fn();
+    let throwOnce = true;
+    const detect = vi.fn((_img: RgbaImage): Promise<QrPoseSolution | null> => {
+      if (throwOnce) {
+        throwOnce = false;
+        throw new Error('sync boom'); // synchronous throw, NOT a rejected promise
+      }
+      return Promise.resolve<QrPoseSolution | null>(solution);
+    });
+    const s = createQrDetectionScheduler({
+      detect,
+      minIntervalMs: 0,
+      requiredLockCount: 1,
+      now: () => t,
+      onError,
+    });
+    const flush = async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve();
+    };
+
+    // offerFrame must NOT throw out to the caller (the XR frame loop).
+    expect(() => s.offerFrame(image)).not.toThrow();
+    await flush();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(s.inFlight).toBe(false); // not wedged
+
+    // The scheduler is still usable after the synchronous throw.
+    t = 1;
+    s.offerFrame(image);
+    await flush();
+    expect(detect).toHaveBeenCalledTimes(2);
+    expect(s.locked).toBe(true);
+  });
+
   it('resets the counter and reports when detect rejects', async () => {
     let t = 0;
     const onError = vi.fn();

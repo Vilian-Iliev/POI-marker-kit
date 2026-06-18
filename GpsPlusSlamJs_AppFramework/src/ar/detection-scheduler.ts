@@ -97,7 +97,17 @@ export function createDetectionScheduler<TResult, TImage = RgbaImage>(
       lastStart = t;
       inFlight = true;
 
-      detect(image)
+      // Invoke `detect` synchronously (callers/tests rely on the start firing in
+      // this tick) but convert a SYNCHRONOUS throw — one that escapes before the
+      // promise is returned, e.g. a dead-worker transport or a sync precondition
+      // check — into a rejection. Otherwise inFlight (set true above) would never
+      // be cleared and all future detections would silently stall forever.
+      // The async wrapper runs `detect(image)` synchronously (no await before
+      // it) yet turns any synchronous throw into a rejection that flows through
+      // the .catch below — preserving the original thrown value.
+      const started: Promise<TResult | null> = (async () => detect(image))();
+
+      started
         .then((result) => {
           if (result) {
             consecutiveLocks = Math.min(

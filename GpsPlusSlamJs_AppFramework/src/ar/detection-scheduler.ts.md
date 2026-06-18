@@ -28,6 +28,14 @@ so a future object detector (YOLO) reuses it unchanged. It gates nothing on QR.
   `requiredLockCount`), resets to 0 on a miss or a rejected `detect`. `onLocked`
   fires on every success once `locked` (so a locked detection keeps voting —
   fresh, time-decayed votes per §12), `onMiss`/`onError` on the respective settle.
+- **`detect` failures never wedge the scheduler:** `inFlight` is set true before
+  `detect` is called, so a **synchronous** throw (one that escapes before the
+  promise is returned — e.g. a dead-worker transport or a sync precondition
+  check) is wrapped into a rejection and handled exactly like an async rejection:
+  `onError` fires, the counter resets, and `inFlight` is cleared. Without this,
+  the lone synchronous-throw path would leave `inFlight` stuck true and silently
+  block all future detections. `offerFrame` therefore never throws to the XR
+  frame loop, and `detect` is still invoked synchronously within the offering tick.
 - **Transport-agnostic, device-free, detection-agnostic:** `detect` and the clock
   are injected; the result and frame types are generic. The same scheduler drives
   a worker-hosted or main-thread pipeline and is fully deterministic in tests.
@@ -35,8 +43,10 @@ so a future object detector (YOLO) reuses it unchanged. It gates nothing on QR.
 ## Tests
 
 - `detection-scheduler.test.ts` — throttle, coalesce, lock-after-N + cap +
-  miss-reset, error-resets + clears in-flight (via the QR specialization); plus a
-  generality test proving a non-QR result type + custom frame type work.
+  miss-reset, error-resets + clears in-flight, **synchronous-throw recovery**
+  (offerFrame does not throw, inFlight clears, scheduler stays usable) (via the
+  QR specialization); plus a generality test proving a non-QR result type +
+  custom frame type work.
 
 ## Related
 
