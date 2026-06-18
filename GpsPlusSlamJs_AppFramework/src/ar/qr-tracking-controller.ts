@@ -197,7 +197,12 @@ export function createQrTrackingController(
     // we cannot place the QR in 3D without it — so we stay scanning.
     const sizeM =
       level.qr.physicalSizeM ?? resolveSizeM?.(detection.text, level) ?? null;
-    if (sizeM === null) {
+    // A degenerate measured size (0, negative, NaN, Infinity) is treated exactly
+    // like an absent one: `resolveSizeM` is an injected boundary that can yield
+    // such values before it converges, and forwarding them to `solvePose`
+    // (→ `buildObjectPoints`) throws a RangeError that would wedge the controller
+    // in the terminal `error` state. Block the solve and stay scanning instead.
+    if (sizeM === null || !(sizeM > 0) || !Number.isFinite(sizeM)) {
       active = null;
       // We fetched the level but can't place the QR without a size; fall back
       // to scanning rather than sticking on 'loading-level'. Size-dependent

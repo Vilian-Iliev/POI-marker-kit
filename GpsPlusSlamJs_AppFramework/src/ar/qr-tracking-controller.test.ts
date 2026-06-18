@@ -14,7 +14,7 @@ import {
   type QrTrackingStatus,
   type QrSolvePoseInput,
 } from './qr-tracking-controller';
-import type { QrPoseSolution } from './qr-pose';
+import { buildObjectPoints, type QrPoseSolution } from './qr-pose';
 import type { QrLevel } from './qr-level';
 import type { RgbaImage, QrDetection, QrFrontEnd } from './qr-frontend';
 
@@ -186,6 +186,43 @@ describe('createQrTrackingController', () => {
     expect(controller.status).toBe('scanning');
     expect(dispatched).toHaveLength(0);
   });
+
+  // Why this test matters: `resolveSizeM` is an injected boundary returning
+  // `number | null` — a depth/measurement resolver can legitimately yield a
+  // degenerate value (0, NaN, Infinity, negative) before it converges. The real
+  // `solvePose` feeds `sizeM` to `buildObjectPoints`, which throws a RangeError
+  // on any non-positive/non-finite size. The controller's size gate only checked
+  // `=== null`, so a degenerate measured size slipped through, crashed the solve,
+  // and wedged the controller in the terminal `error` state instead of degrading
+  // to `scanning` exactly like the `null` case. These prove the gate treats a
+  // degenerate measured size identically to an absent one.
+  it.each([0, -0.1, NaN, Infinity])(
+    'stays scanning (not error) when resolveSizeM returns degenerate %p',
+    async (badSize) => {
+      const onError = vi.fn();
+      const { controller, statuses } = setup({
+        fetchLevel: vi.fn(() =>
+          Promise.resolve({
+            version: 1,
+            qr: { geo: { lat: 47.5, lon: 8.7, alt: 400, headingDeg: 30 } },
+          })
+        ),
+        // Mirror the production wiring: the real solvePose derives object points
+        // via buildObjectPoints, which rejects a non-positive/non-finite size.
+        solvePose: (input: QrSolvePoseInput) => {
+          buildObjectPoints(input.sizeM);
+          return solution;
+        },
+        resolveSizeM: () => badSize,
+        onError,
+      });
+      await tick(controller);
+      await tick(controller);
+      expect(controller.status).toBe('scanning');
+      expect(statuses).not.toContain('error');
+      expect(onError).not.toHaveBeenCalled();
+    }
+  );
 
   it('uses a resolved (e.g. depth-measured) size when the level omits it', async () => {
     const solvePose = vi.fn((_input: QrSolvePoseInput) => solution);

@@ -35,8 +35,12 @@ timestamp }`, emitted via `onDetection` on every lock. Structural (no import
   read by `onLocked`.
 - **Size lifecycle gate (Note 3):** the solve needs a size. Order: the level's
   authored `physicalSizeM`, else `resolveSizeM(text, level)` (e.g. a measured
-  median). A `null`/absent size BLOCKS the solve (stays `scanning`) — no pose,
-  no detection, no vote — until a size is authored or measured-and-locked.
+  median). A `null`/absent size — OR a degenerate measured one (≤ 0, `NaN`,
+  `Infinity`, which `resolveSizeM` can yield before it converges) — BLOCKS the
+  solve (stays `scanning`) — no pose, no detection, no vote — until a valid size
+  is authored or measured-and-locked. Degenerate sizes are gated here rather than
+  left to crash `buildObjectPoints` (RangeError) and wedge the controller in
+  `error`.
 - **qrDetected emission is unconditional; the vote is conditional on `geo`**
   (Note 3). Every lock fires `onDetection`; `buildQrGpsVotes` (4-corner
   multi-correspondence) runs **only** when `level.qr.geo` is present, so geo-less
