@@ -17,8 +17,8 @@ Visualizes GPS events as 3D markers during recording and replay. Shows three typ
 
 ### GpsEventVisualizer Class
 
-- `setZeroRef(zero: LatLong): void` — set GPS origin for coordinate conversion.
-- `getZeroRef(): LatLong | null` — get current GPS origin.
+- `setZeroRef(zero: LatLong): void` — record that a GPS origin exists. This is a **readiness gate only**: `addGpsEvent` refuses to add markers until a zero is set. It is **NOT** used for any coordinate math — `gpsCoords` arrive already converted to metres-from-origin by the library reducer (`rawGpsPointToGpsPoint` → `calcRelativeCoordsInMeters`), frozen at record time. Consequently a stale or changed zero on this visualizer can **not** offset existing markers (contrast `RefPointVisualizer`, whose `zeroRef` IS load-bearing for lat/lon → metres conversion). See the [state-outside-store audit](../../../../gps-plus-slam/GpsPlusSlamJs_Docs/docs/2026-06-18-state-outside-store-audit.md) F2.
+- `getZeroRef(): LatLong | null` — return the readiness-gate value (null until set).
 - `addGpsEvent(gpsCoords: [x,y,z], odomPos: [x,y,z], accuracy?: GpsEventAccuracy): void` — add markers for a GPS event.
   - When `accuracy` is omitted (recording mode), the yellow raw-GPS marker is a fixed 8 cm sphere at opacity 0.3 (legacy behaviour, all existing call sites unchanged).
   - When **both** `accuracy.horizontal` and `accuracy.vertical` are positive numbers, the yellow marker becomes a unit-sphere scaled to `(h, v, h)` metres at opacity 0.13 with `renderOrder = -1` so cyan/red markers stay visible inside it.
@@ -39,7 +39,7 @@ export const gpsEventVisualizer: GpsEventVisualizer;
 
 ## Invariants & Assumptions
 
-1. **Zero reference must be set** before adding GPS events
+1. **Zero reference must be set** before adding GPS events — but purely as a readiness gate (see `setZeroRef` above); marker positions come from the pre-computed `gpsCoords`, not from this field.
 2. **Scene must be available** (from `getScene()`) for raw GPS markers to be created
 3. **arWorldGroup must be available** (from `getArWorldGroup()`) for fused markers; if unavailable, only raw GPS marker is created
 4. **Raw GPS markers are immutable** — they never move after creation (scene root)
