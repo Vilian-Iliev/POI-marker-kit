@@ -656,6 +656,9 @@ export function showArReadyControls(): void {
   cachedElements.recordingIndicator.classList.add('hidden');
   // Reset ref point button label for next session (Change D)
   cachedElements.btnRefPoint.textContent = DEFAULT_REF_POINT_LABEL;
+  // Clear any leftover proximity hint (D3) so it does not linger into the
+  // next AR_READY state before recording starts.
+  updateRefPointHint(undefined);
 }
 
 /**
@@ -669,6 +672,41 @@ export function updateRefPointButtonLabel(refPointName?: string): void {
   cachedElements.btnRefPoint.textContent = refPointName
     ? `📍 Capture '${refPointName}'`
     : DEFAULT_REF_POINT_LABEL;
+}
+
+/**
+ * Update the inline ref-point proximity hint (D3, 2026-06-16 user feedback,
+ * Finding 3) so the button's name relabel reads as a *location confirmation*
+ * rather than a mysterious "the marker name switched to an older one".
+ *
+ * - Not near a known point (`undefined`) → hint hidden; the "📍 Mark Point"
+ *   button is self-explanatory and a persistent hint would just be clutter.
+ * - Same cell as a known point (`isNeighborCell === false`) → "You're at
+ *   '<name>' — tap 📍 to re-observe it." (the ➕ button is hidden here).
+ * - Neighbour cell (`isNeighborCell === true`) → "Near '<name>' — tap 📍 to
+ *   re-observe it, or ➕ to mark a new point here." (both options are live).
+ *
+ * Display-only: this changes no marking behaviour and adds no name-management
+ * UI (names stay secondary to the H3 cell). Looks the element up lazily and is
+ * a no-op when absent (trimmed test fixtures / pre-`initUI`).
+ */
+export function updateRefPointHint(nearby?: {
+  displayName: string;
+  isNeighborCell: boolean;
+}): void {
+  const hint = document.getElementById('ref-point-hint');
+  if (!hint) {
+    return;
+  }
+  if (!nearby) {
+    hint.textContent = '';
+    hint.classList.add('hidden');
+    return;
+  }
+  hint.textContent = nearby.isNeighborCell
+    ? `Near '${nearby.displayName}' — tap 📍 to re-observe it, or ➕ to mark a new point here.`
+    : `You're at '${nearby.displayName}' — tap 📍 to re-observe it.`;
+  hint.classList.remove('hidden');
 }
 
 /**

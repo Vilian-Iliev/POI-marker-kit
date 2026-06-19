@@ -85,6 +85,15 @@
 
       <!-- Controls Overlay -->
       <div id="controls">
+        <!-- Ref-point proximity hint (D3, 2026-06-16 user feedback,        -->
+        <!-- Finding 3): makes the "📍 Capture '<name>'" relabel read as a  -->
+        <!-- location confirmation. Hidden until near a known point;        -->
+        <!-- populated by updateRefPointHint() on each GPS update.          -->
+        <div
+          id="ref-point-hint"
+          role="status"
+          class="hidden mx-auto mb-2 w-fit max-w-[90%] text-center text-sm text-white bg-black/70 rounded-lg py-1.5 px-3 shadow-lg"
+        ></div>
         <div class="flex justify-between items-end">
           <!-- Left side: Recording controls -->
           <div class="flex gap-2 items-center">

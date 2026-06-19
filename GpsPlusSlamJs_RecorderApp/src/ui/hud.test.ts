@@ -32,6 +32,7 @@ import {
   updateTrackingQuality,
   hideTrackingQuality,
   showUnsupportedPlatformNotice,
+  updateRefPointHint,
   type UICallbacks,
 } from './hud.js';
 import type { PermissionCheckResult } from 'gps-plus-slam-app-framework/sensors/permission-checker';
@@ -2931,5 +2932,71 @@ describe('showUnsupportedPlatformNotice', () => {
     // The notice must live where the user lands (the setup modal), not buried.
     const full = loadFullIndexHtml();
     expect(full).toContain('id="unsupported-platform-notice"');
+  });
+});
+
+/**
+ * Tests for the in-AR ref-point proximity hint (D3, 2026-06-16 user feedback,
+ * Finding 3).
+ *
+ * Why these tests matter: the dual proximity model (tap to re-observe a nearby
+ * known point vs. ➕ to force-create a new one, plus the button relabelling to
+ * the nearby point's name) confused the field tester ("sometimes you create new
+ * ones, sometimes the name switches to an older one"). The decision (D3) is to
+ * KEEP the model but make the state legible: the displayed name is a *location
+ * confirmation* ("you're at 'Bench', not its neighbour"). This hint renders that
+ * confirmation inline. No name-management UI, no behaviour change.
+ */
+describe('updateRefPointHint', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('confirms the location and the re-observe action when in the same cell as a known point', () => {
+    document.body.innerHTML = '<div id="ref-point-hint" class="hidden"></div>';
+
+    updateRefPointHint({ displayName: 'Bench', isNeighborCell: false });
+
+    const hint = document.getElementById('ref-point-hint')!;
+    expect(hint.classList.contains('hidden')).toBe(false);
+    expect(hint.textContent).toContain('Bench');
+    expect(hint.textContent).toMatch(/re-observe/i);
+    // Same cell: no ➕ guidance (the secondary button is hidden in this state).
+    expect(hint.textContent).not.toContain('➕');
+  });
+
+  it('explains both the re-observe and the ➕ new-point option when in a neighbour cell', () => {
+    document.body.innerHTML = '<div id="ref-point-hint" class="hidden"></div>';
+
+    updateRefPointHint({ displayName: 'Bench', isNeighborCell: true });
+
+    const hint = document.getElementById('ref-point-hint')!;
+    expect(hint.classList.contains('hidden')).toBe(false);
+    expect(hint.textContent).toContain('Bench');
+    expect(hint.textContent).toMatch(/re-observe/i);
+    // Neighbour cell: the ➕ force-new option is offered.
+    expect(hint.textContent).toContain('➕');
+  });
+
+  it('hides the hint when not near any known point', () => {
+    document.body.innerHTML =
+      "<div id=\"ref-point-hint\">You're at 'Bench'</div>";
+
+    updateRefPointHint(undefined);
+
+    const hint = document.getElementById('ref-point-hint')!;
+    expect(hint.classList.contains('hidden')).toBe(true);
+    expect(hint.textContent).toBe('');
+  });
+
+  it('does not throw when the hint element is absent (defensive)', () => {
+    expect(() =>
+      updateRefPointHint({ displayName: 'X', isNeighborCell: false })
+    ).not.toThrow();
+  });
+
+  it('index.html ships the hint element near the recording controls', () => {
+    const full = loadFullIndexHtml();
+    expect(full).toContain('id="ref-point-hint"');
   });
 });

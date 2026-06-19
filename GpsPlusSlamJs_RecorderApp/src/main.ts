@@ -44,6 +44,7 @@ import {
   showSetupModal,
   updateRefPointButtonLabel,
   setNewRefPointButtonVisible,
+  updateRefPointHint,
   updateTrackingQuality,
   showUnsupportedPlatformNotice,
 } from './ui/hud';
@@ -306,6 +307,8 @@ const recordingSessionHandlers = createRecordingSessionHandlers({
     const nearby = refPointHandlers.checkNearbyRefPoint(lat, lng);
     updateRefPointButtonLabel(nearby?.displayName);
     setNewRefPointButtonVisible(nearby?.isNeighborCell ?? false);
+    // D3: inline confirmation hint so the name relabel reads as "you're at X".
+    updateRefPointHint(nearby);
   },
 });
 
