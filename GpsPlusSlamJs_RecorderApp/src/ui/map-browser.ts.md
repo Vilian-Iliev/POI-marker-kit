@@ -44,6 +44,7 @@ The actual rewrite + permission + per-file safety live in `storage/coverage-back
 - Coverage with no cells frames the whole world (`WORLD_ZOOM`) instead of throwing on an invalid bounds.
 - **Frame to coverage exactly once (O1).** The map fits to coverage on the first recording that carries cells (whether supplied at construction or streamed in via `addRecording`) and is **not** moved as more recordings stream in — re-fitting on every add would yank the view around. A "fit to all" affordance can re-fit on demand (future).
 - Pending re-render (rAF) and the progress auto-hide timer are cancelled in `destroy()`, so an aborted/closed stream never paints into a torn-down map.
+- **Late async callbacks are guarded against `destroyed`.** Teardown runs `abort()` then `destroy()` synchronously, but the indexing stream lets in-flight workers finish, so `setIndexingProgress` (via `onProgress`) and the `onBackfill` continuation can both resolve **after** `destroy()`. Both early-return when `destroyed` (mirroring `addRecording`/`scheduleRender`), so a late callback neither mutates detached DOM nor arms a `setTimeout` that `destroy()` has already finished clearing (which would leak a timer pinning the detached nodes).
 
 ## Tests
 
@@ -52,3 +53,4 @@ The actual rewrite + permission + per-file safety live in `storage/coverage-back
   - **Progressive streaming** (`mountMapBrowserEmpty` + `streamMapBrowserRecording` hooks): the map is interactive with a "0 / total" progress pill before any recording resolves; tiles and tour items grow as recordings stream in and progress counts up; the pill shows a brief confirmation and then hides once `done === total`.
   - **Backfill CTA** (`mountMapBrowserBackfill` hook with a deferred `onBackfill`): the CTA appears after indexing with the candidate count; clicking shows the transitional "Embedding…" then, on release, the final "Embedded N" confirmation before auto-hiding (success) or a "Write access denied" retry label that stays visible (permission denied).
 - Pure tile/filter/zoom logic: `src/ui/map-browser-index.test.ts` + `.property.test.ts`.
+- Destroy safety (unit, mocked Leaflet): `src/ui/map-browser.test.ts` — `setIndexingProgress` and the `onBackfill` continuation are both no-ops after `destroy()` (no leaked progress/backfill timer), pinning the late-callback guards above.

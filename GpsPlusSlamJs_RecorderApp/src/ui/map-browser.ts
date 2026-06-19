@@ -367,6 +367,13 @@ export function createMapBrowser(
     }
 
     function setIndexingProgress(done: number, total: number): void {
+      // A late progress callback can arrive after teardown: the indexing stream
+      // is aborted then the browser is destroyed, but an in-flight worker still
+      // resolves and fires onProgress. Bail out so we neither touch detached DOM
+      // nor arm a progress-hide timer destroy() has already finished clearing.
+      if (destroyed) {
+        return;
+      }
       if (progressHideTimer !== null) {
         clearTimeout(progressHideTimer);
         progressHideTimer = null;
@@ -425,6 +432,12 @@ export function createMapBrowser(
       backfillBtn.textContent = 'Embedding…';
       try {
         const result = await options.onBackfill();
+        // The user may have closed the map while the backfill was in flight
+        // (teardown aborts the same signal). Don't update detached DOM or arm a
+        // hide timer destroy() can no longer clear.
+        if (destroyed) {
+          return;
+        }
         backfillRunning = false;
         if (result.permissionDenied) {
           // Degrade: the in-memory index still works; let the user retry.
