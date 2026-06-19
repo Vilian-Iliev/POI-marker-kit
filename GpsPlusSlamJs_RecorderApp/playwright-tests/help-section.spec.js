@@ -14,6 +14,7 @@ import { test, expect } from '@playwright/test';
 
 // ⚠️ Also defined in src/ui/hud.ts — keep in sync!
 const HELP_COLLAPSED_KEY = 'gps-recorder-help-collapsed';
+const HELP_SEEN_KEY = 'gps-recorder-help-seen';
 
 /**
  * Helper to toggle the help section by dispatching a click on the summary.
@@ -32,14 +33,21 @@ async function toggleHelpSection(page) {
 }
 
 test.describe('Help Section', () => {
-  // For most tests, clear localStorage before navigating to simulate fresh user
+  // Simulate a genuine FIRST-TIME user: clear BOTH the collapsed preference and
+  // the "seen" marker, then reload so that reload is the first launch this user
+  // has ever made (open by default). The "show the manual once" behaviour
+  // (2026-06-19) collapses on every *subsequent* start, so the seen marker must
+  // be cleared too or the reload would already count as a return visit.
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    // Clear localStorage after navigating but before app initializes help state
-    await page.evaluate((key) => {
-      localStorage.removeItem(key);
-    }, HELP_COLLAPSED_KEY);
-    // Reload to pick up the cleared state
+    await page.evaluate(
+      ([collapsedKey, seenKey]) => {
+        localStorage.removeItem(collapsedKey);
+        localStorage.removeItem(seenKey);
+      },
+      [HELP_COLLAPSED_KEY, HELP_SEEN_KEY]
+    );
+    // Reload to pick up the cleared state (this reload = the first-ever launch).
     await page.reload();
     // Wait for setup modal to be visible
     await page.locator('#setup-modal').waitFor({ state: 'visible' });
@@ -55,6 +63,21 @@ test.describe('Help Section', () => {
     // The content should be visible (details is open)
     const helpContent = page.locator('#help-section-content');
     await expect(helpContent).toBeVisible();
+  });
+
+  test('help section is collapsed by default on a return visit (manual shown once)', async ({
+    page,
+  }) => {
+    // beforeEach has already made one (first-time) launch, so the "seen" marker
+    // is now set. A plain reload — no explicit collapse — is a return visit and
+    // must default to collapsed so the task, not the manual, leads the screen.
+    const helpContent = page.locator('#help-section-content');
+    await expect(helpContent).toBeVisible(); // first-time launch: open
+
+    await page.reload();
+    await page.locator('#setup-modal').waitFor({ state: 'visible' });
+
+    await expect(helpContent).not.toBeVisible(); // return visit: collapsed
   });
 
   test('help section contains key concept explanations', async ({ page }) => {

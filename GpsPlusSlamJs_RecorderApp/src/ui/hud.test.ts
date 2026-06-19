@@ -2875,6 +2875,78 @@ describe('hideTrackingQuality', () => {
 });
 
 /**
+ * Help-section collapse behaviour (Issue 2 / 2026-01-27, revisited 2026-06-19).
+ *
+ * Why these tests matter: a user reported the "What is this app?" help section
+ * is "always open also on future starts of the recorder". The 2026-01-27 design
+ * is open-by-default + *sticky collapse* (collapsing persists via the
+ * `gps-recorder-help-collapsed` localStorage key). These tests pin the actual
+ * behaviour of `initHelpSection` (driven through `initUI`, which the existing
+ * `setupMinimalDOM` never exercised because it omits `#help-section`) so we can
+ * tell a real persistence bug apart from a default-behaviour expectation
+ * mismatch.
+ */
+describe('help section collapse persistence', () => {
+  const HELP_COLLAPSED_KEY = 'gps-recorder-help-collapsed';
+  const HELP_SEEN_KEY = 'gps-recorder-help-seen';
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  function setupWithHelp(): void {
+    setupMinimalDOM();
+    // index.html ships the section with a static `open` attribute.
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      `<details id="help-section" open>
+         <summary>What is this app?</summary>
+         <div id="help-section-content">help text</div>
+       </details>`
+    );
+  }
+
+  function help(): HTMLDetailsElement {
+    return document.getElementById('help-section') as HTMLDetailsElement;
+  }
+
+  it('is open on the very first start (no stored preference)', () => {
+    setupWithHelp();
+    initUI(createMockCallbacks());
+    expect(help().open).toBe(true);
+  });
+
+  it('persists a collapse to localStorage when the user closes it', () => {
+    setupWithHelp();
+    initUI(createMockCallbacks());
+    // jsdom does not auto-fire `toggle` on an `open` change — simulate the user.
+    help().open = false;
+    help().dispatchEvent(new Event('toggle'));
+    expect(localStorage.getItem(HELP_COLLAPSED_KEY)).toBe('true');
+  });
+
+  it('restores the collapsed state on a fresh start after the user collapsed it', () => {
+    localStorage.setItem(HELP_COLLAPSED_KEY, 'true');
+    setupWithHelp();
+    initUI(createMockCallbacks());
+    expect(help().open).toBe(false);
+  });
+
+  // The reported expectation: the manual should show ONCE. A returning user
+  // (who has launched before but never explicitly collapsed it) should NOT keep
+  // getting the full wall of help text on every start — it should default to
+  // collapsed once seen, while first-time users still get it open.
+  it('collapses by default on a return visit even if the user never collapsed it', () => {
+    // Simulate "the user has opened the app before" (help was already seen) but
+    // has no explicit collapse preference stored.
+    localStorage.setItem(HELP_SEEN_KEY, 'true');
+    setupWithHelp();
+    initUI(createMockCallbacks());
+    expect(help().open).toBe(false);
+  });
+});
+
+/**
  * Tests for the unsupported-platform notice (D1, 2026-06-16 user feedback,
  * Finding 1).
  *

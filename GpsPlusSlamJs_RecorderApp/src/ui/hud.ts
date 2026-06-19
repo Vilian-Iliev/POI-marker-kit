@@ -1172,19 +1172,27 @@ export function getSaveLocationSelected(): boolean {
 // --- Help Section (Issue 2 - User Feedback 2026-01-27) ---
 
 /**
- * localStorage key for help section collapsed state.
+ * localStorage keys for the help section.
  * ⚠️ Also defined in playwright-tests/help-section.spec.js — keep in sync!
  */
 const HELP_COLLAPSED_KEY = 'gps-recorder-help-collapsed';
+/** Set once the help section has been shown to this user at least once. */
+const HELP_SEEN_KEY = 'gps-recorder-help-seen';
 
 /**
  * Initialize the collapsible help section.
- * - Restores collapsed state from localStorage
- * - Saves state changes when user toggles the section
  *
- * The help section is open by default for first-time users to explain
- * key concepts (scenario, session, reference points). Once a user closes it,
- * the preference is remembered.
+ * **Show the manual once (2026-06-19 user feedback).** The section explains key
+ * concepts (scenario, session, reference points) and is open **only on the very
+ * first launch** so a first-time user sees it. On every **subsequent** start it
+ * defaults to **collapsed** so the actual task — not a wall of help text — is the
+ * first thing a returning user sees. (Previously it was open-until-manually-
+ * collapsed, so a user who never closed it got the full help on every start —
+ * the reported "always open also on future starts".)
+ *
+ * Precedence: an explicit collapse preference wins; otherwise first-time → open,
+ * returning → collapsed. An explicit user toggle is still persisted via the
+ * `toggle` listener.
  */
 function initHelpSection(): void {
   const helpSection = document.getElementById(
@@ -1195,13 +1203,23 @@ function initHelpSection(): void {
     return;
   }
 
-  // Restore collapsed state from localStorage
-  const wasCollapsed = localStorage.getItem(HELP_COLLAPSED_KEY) === 'true';
-  if (wasCollapsed) {
+  const explicitlyCollapsed =
+    localStorage.getItem(HELP_COLLAPSED_KEY) === 'true';
+  const seenBefore = localStorage.getItem(HELP_SEEN_KEY) === 'true';
+
+  // Collapse for everyone except a genuine first-time user (no prior visit and
+  // no explicit preference). `index.html` ships the section with a static
+  // `open` attribute, so we only ever need to remove it.
+  if (explicitlyCollapsed || seenBefore) {
     helpSection.removeAttribute('open');
   }
 
-  // Save state when user toggles the section
+  // Remember that this user has now seen the help, so the next start defaults
+  // to collapsed even if they never explicitly close it.
+  localStorage.setItem(HELP_SEEN_KEY, 'true');
+
+  // Persist an explicit user toggle (so a deliberate expand/collapse is honoured
+  // over the returning-user default).
   helpSection.addEventListener('toggle', () => {
     const isNowOpen = helpSection.open;
     if (isNowOpen) {
