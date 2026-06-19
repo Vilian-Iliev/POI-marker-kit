@@ -95,6 +95,26 @@ test.describe('Setup Modal Flow', () => {
     await expect(enterButton).toContainText('Enter AR');
   });
 
+  // D2 (2026-06-19 round-2 feedback): session notes is an optional,
+  // session-level field, so it now lives INSIDE the collapsed scenario/session
+  // <details> — hidden by default, revealed only when the user expands the
+  // section. Mirrors "scenario section is a collapsed details by default".
+  test('session notes is hidden by default and revealed when the section expands', async ({
+    page,
+  }) => {
+    const notes = page.locator('#session-notes');
+    // Inside the collapsed <details> → not visible on first paint.
+    await expect(notes).toBeHidden();
+    // It is a descendant of the scenario/session section, not a sibling after it.
+    const insideSection = await notes.evaluate(
+      (el) => !!el.closest('#scenario-section')
+    );
+    expect(insideSection).toBe(true);
+    // Expanding the section reveals it.
+    await expandScenarioSection(page);
+    await expect(notes).toBeVisible();
+  });
+
   test('session notes textarea is enabled after storage is ready', async ({
     page,
   }) => {
@@ -102,6 +122,10 @@ test.describe('Setup Modal Flow', () => {
     const notesTextarea = page.locator('#session-notes');
     // Simulate mandatory storage selection (Task 1a-fix)
     await setStorageReady(page);
+    // Notes now lives in the collapsed scenario/session section (D2) — expand
+    // it so the textarea is actually visible, then assert it is editable.
+    await expandScenarioSection(page);
+    await expect(notesTextarea).toBeVisible();
     await expect(notesTextarea).toBeEnabled();
   });
 
@@ -336,7 +360,11 @@ test.describe('Session Notes Interaction', () => {
     // Enable the textarea by populating scenarios (simulates folder selection)
     await callRealPopulateScenarios(page, ['Test Scenario']);
 
+    // Notes now lives in the collapsed scenario/session section (D2) — fill()
+    // requires the element to be visible, so expand the section first.
+    await expandScenarioSection(page);
     const notes = page.locator('#session-notes');
+    await expect(notes).toBeVisible();
     await expect(notes).toBeEnabled();
 
     // Type multiline text
