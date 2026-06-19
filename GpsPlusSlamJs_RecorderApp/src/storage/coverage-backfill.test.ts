@@ -35,7 +35,9 @@ class FakeFileHandle {
   blob: Blob;
   failGetFile = false;
   failCreateWritable = false;
+  failWrite = false;
   writeCount = 0;
+  aborted = false;
 
   constructor(name: string, blob: Blob) {
     this.name = name;
@@ -57,11 +59,21 @@ class FakeFileHandle {
     }
     const stream = {
       write: (data: unknown) => {
+        // A failed write must NOT touch `blob`: in the real FS-Access API the
+        // write lands in a temp swap file, so the original stays intact until
+        // close() atomically swaps it in.
+        if (this.failWrite) {
+          return Promise.reject(new Error('write failed'));
+        }
         this.blob = data as Blob;
         return Promise.resolve();
       },
       close: () => {
         this.writeCount += 1;
+        return Promise.resolve();
+      },
+      abort: () => {
+        this.aborted = true;
         return Promise.resolve();
       },
     } as unknown as FileSystemWritableFileStream;
@@ -166,6 +178,32 @@ describe('backfillCoverageIntoZips', () => {
     expect((await loadSessionMetadataFromBlob(good.blob))?.h3Cells).toEqual(
       CELLS
     );
+  });
+
+  it('aborts the writable (no partial commit) when write() fails mid-rewrite', async () => {
+    // Why: createWritable() writes to a temp swap file that close() atomically
+    // swaps over the original. If write() throws, calling close() in cleanup
+    // would commit the partial/empty temp — corrupting the user's recording.
+    // The stream must instead be abort()ed: that discards the temp (original
+    // untouched) AND finalizes the stream so the file handle/lock is not leaked.
+    const h = new FakeFileHandle('a.zip', await legacyZipBlob('A'));
+    const original = h.blob;
+    h.failWrite = true;
+    const { handle } = fakeRoot('granted');
+
+    const result = await backfillCoverageIntoZips(handle, [candidate(h)]);
+
+    expect(result.failed).toBe(1);
+    expect(result.embedded).toBe(0);
+    // close() must NOT run — it would atomically swap the partial temp in.
+    expect(h.writeCount).toBe(0);
+    // abort() MUST run — otherwise the stream/lock is leaked.
+    expect(h.aborted).toBe(true);
+    // The original file is left byte-for-byte intact (no coverage embedded).
+    expect(h.blob).toBe(original);
+    expect(
+      (await loadSessionMetadataFromBlob(h.blob))?.h3Cells
+    ).toBeUndefined();
   });
 
   it('skips (no write) a zip without session.json', async () => {

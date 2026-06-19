@@ -23,6 +23,7 @@ The coverage cells are already derived in memory while the map browser streams i
   - **Deliberate deviation from the plan's B4:** the plan prescribed a manual `<name>.h3.tmp` sibling + read-back. That assumed the FS-Access API has no atomic rename, but `createWritable()` already provides one; the manual sibling also needs per-file parent-directory handles and leaves `.tmp` litter. The in-memory verify + atomic `createWritable` is simpler, has no litter, and is at least as safe.
 - **Idempotent / no-op safe:** a candidate whose zip has no/broken/already-embedded `session.json` is counted as `skipped` and left untouched (the B3 primitive returns the input by reference). Re-running the upgrade only rewrites what still needs it.
 - **Isolated failures:** a per-file read/verify/write error is logged, counted in `failed`, and does not abort the rest. Bounded concurrency (`BACKFILL_WRITE_CONCURRENCY = 4`); abortable via `signal` (stops pulling new files, skips the in-flight write).
+  - **Write-failure cleanup uses `abort()`, never `close()`.** If `write()`/`close()` throws mid-rewrite, the temp swap holds a partial/empty result. The handler `abort()`s the writable so that temp is **discarded without** the atomic swap (calling `close()` would commit the corruption over the user's recording) and the stream's file-handle lock is finalized rather than leaked. The original file is left byte-for-byte intact and the file is counted in `failed`.
 
 ## Examples
 
@@ -46,4 +47,4 @@ if (result.permissionDenied)
 
 ## Tests
 
-- `coverage-backfill.test.ts` (purpose-built fake file handles, since the shared `MockFSFileHandle.createWritable` stores strings not Blobs): embeds coverage into legacy `produceTestZip`s and re-reads `h3Cells` back; permission denied → no writes + `permissionDenied`; a per-file `createWritable` failure is isolated and counted while the rest embed; a zip without `session.json` is `skipped` (no write); an already-aborted signal prompts no permission and writes nothing.
+- `coverage-backfill.test.ts` (purpose-built fake file handles, since the shared `MockFSFileHandle.createWritable` stores strings not Blobs): embeds coverage into legacy `produceTestZip`s and re-reads `h3Cells` back; permission denied → no writes + `permissionDenied`; a per-file `createWritable` failure is isolated and counted while the rest embed; a `write()` failure mid-rewrite `abort()`s the writable (asserts `abort` ran, `close` did not, and the original blob is untouched) so no partial commit/handle leak occurs; a zip without `session.json` is `skipped` (no write); an already-aborted signal prompts no permission and writes nothing.

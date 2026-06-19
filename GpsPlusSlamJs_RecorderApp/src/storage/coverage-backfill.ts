@@ -153,8 +153,18 @@ export async function backfillCoverageIntoZips(
         }
         // createWritable() writes to a temp and atomically swaps on close().
         const writable = await candidate.fileHandle.createWritable();
-        await writable.write(rewritten);
-        await writable.close();
+        try {
+          await writable.write(rewritten);
+          await writable.close();
+        } catch (writeErr) {
+          // The write/close failed, so the temp swap holds a partial (or empty)
+          // result. abort() — NOT close() — discards that temp without swapping
+          // it over the original (close() would commit the corruption) and
+          // finalizes the stream so its file-handle lock is not leaked. Re-throw
+          // so the outer catch isolates and counts this file as failed.
+          await writable.abort().catch(() => {});
+          throw writeErr;
+        }
         embedded += 1;
       } catch (err) {
         log.warn(`Backfill failed for ${candidate.filename}:`, err);
