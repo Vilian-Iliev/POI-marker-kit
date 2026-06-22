@@ -148,6 +148,14 @@ describe('settings-modal', () => {
       expect(html).toContain('id="occupancy-cell-size-value"');
     });
 
+    it('includes the occupancy noise-filter (min-confidence) slider and value display', () => {
+      // 2026-06-22 behind-surface-noise plan: the voxel noise filter
+      // (occupancy.minConfidence) must be user-tunable from this modal.
+      const html = loadSettingsModalHtml();
+      expect(html).toContain('id="occupancy-min-confidence"');
+      expect(html).toContain('id="occupancy-min-confidence-value"');
+    });
+
     it('includes the frame-tile display-resolution slider and value display', () => {
       // D7-resolution, 2026-06-16 user feedback: the in-AR/replay tile display
       // resolution (frameTileDisplay.divisor) must be user-configurable here,
@@ -322,6 +330,36 @@ describe('settings-modal', () => {
       const valueDisplay = document.getElementById('occupancy-cell-size-value');
       expect(slider.value).toBe('3');
       expect(valueDisplay?.textContent).toBe('3 cm');
+    });
+
+    it('populates the noise-filter slider from saved options', () => {
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ occupancy: { minConfidence: 5 } })
+      );
+
+      showSettingsModal();
+
+      const slider = document.getElementById(
+        'occupancy-min-confidence'
+      ) as HTMLInputElement;
+      const valueDisplay = document.getElementById(
+        'occupancy-min-confidence-value'
+      );
+      expect(slider.value).toBe('5');
+      expect(valueDisplay?.textContent).toBe('5');
+    });
+
+    it('labels min-confidence 1 as unfiltered', () => {
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ occupancy: { minConfidence: 1 } })
+      );
+
+      showSettingsModal();
+
+      const valueDisplay = document.getElementById(
+        'occupancy-min-confidence-value'
+      );
+      expect(valueDisplay?.textContent).toBe('1 (unfiltered)');
     });
 
     it('populates AR crash isolation checkbox from saved options', () => {
@@ -852,6 +890,21 @@ describe('settings-modal', () => {
 
       expect(valueDisplay?.textContent).toBe('5 cm');
       expect(getWorkingOptions()?.occupancy.cellSizeM).toBeCloseTo(0.05);
+    });
+
+    it('updates the noise-filter (min-confidence) working option', () => {
+      const slider = document.getElementById(
+        'occupancy-min-confidence'
+      ) as HTMLInputElement;
+      const valueDisplay = document.getElementById(
+        'occupancy-min-confidence-value'
+      );
+
+      slider.value = '6';
+      slider.dispatchEvent(new Event('input'));
+
+      expect(valueDisplay?.textContent).toBe('6');
+      expect(getWorkingOptions()?.occupancy.minConfidence).toBe(6);
     });
   });
 

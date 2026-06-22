@@ -1094,6 +1094,24 @@ No errors</pre
                 cubes + COLMAP export). Smaller = finer detail but much heavier.
                 Applies the next time you enter AR or load a replay.
               </p>
+              <div class="space-y-1">
+                <div class="flex justify-between text-xs text-gray-400">
+                  <span>Noise Filter (min confidence)</span>
+                  <span id="occupancy-min-confidence-value">3</span>
+                </div>
+                <input
+                  type="range"
+                  id="occupancy-min-confidence"
+                  aria-label="Noise Filter (min confidence)"
+                  class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+              </div>
+              <p class="text-[11px] text-gray-400">
+                How many times a voxel must be observed before it is drawn.
+                Higher hides single-frame depth noise (e.g. phantom voxels below
+                the floor) but may drop briefly-seen surfaces. 1 = unfiltered.
+                Applies the next time you enter AR or load a replay.
+              </p>
             </div>
           </div>
 

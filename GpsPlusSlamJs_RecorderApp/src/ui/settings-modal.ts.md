@@ -42,6 +42,8 @@ UI component for the settings modal dialog. Allows users to configure recording 
 | `images-resolution-divisor-value` | span     | Display: "1× (full)", "÷2 (half)", etc                     |
 | `occupancy-cell-size`             | range    | Voxel size slider — **cm** (1–20)                          |
 | `occupancy-cell-size-value`       | span     | Display: "15 cm"                                           |
+| `occupancy-min-confidence`        | range    | Voxel noise filter — min observations to render (1–10)     |
+| `occupancy-min-confidence-value`  | span     | Display: count, or "1 (unfiltered)"                        |
 | `viz-frame-tiles`                 | checkbox | Live overlay: captured camera frames (default on)          |
 | `viz-occupancy-cubes`             | checkbox | Live overlay: occupancy depth cubes (default on)           |
 | `viz-gps-alignment-markers`       | checkbox | Live overlay: GPS+VIO alignment spheres (default on)       |

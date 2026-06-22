@@ -279,6 +279,52 @@ describe('recording-options', () => {
         DEFAULT_RECORDING_OPTIONS.occupancy.cellSizeM
       );
     });
+
+    /**
+     * Why these matter: `minConfidence` is the voxel noise filter exposed as a
+     * recorder setting (2026-06-22 behind-surface-noise plan). It is forwarded
+     * to `getOccupiedCells(minObservations)`, which expects a positive integer,
+     * so validation must round, clamp to 1–10, and reject garbage to the
+     * default (default 3, not 1 — the filter is on out of the box).
+     */
+    it('defaults minConfidence to 3 for an empty object', () => {
+      expect(validateOccupancyOptions({}).minConfidence).toBe(3);
+    });
+
+    it('preserves a valid in-range minConfidence', () => {
+      expect(validateOccupancyOptions({ minConfidence: 5 }).minConfidence).toBe(
+        5
+      );
+    });
+
+    it('rounds a fractional minConfidence to an integer', () => {
+      expect(
+        validateOccupancyOptions({ minConfidence: 4.6 }).minConfidence
+      ).toBe(5);
+    });
+
+    it('clamps minConfidence below 1 up to 1 (1 = unfiltered floor)', () => {
+      expect(validateOccupancyOptions({ minConfidence: 0 }).minConfidence).toBe(
+        OCCUPANCY_CONSTRAINTS.minConfidence.min
+      );
+    });
+
+    it('clamps minConfidence above the ceiling down to max', () => {
+      expect(
+        validateOccupancyOptions({ minConfidence: 50 }).minConfidence
+      ).toBe(OCCUPANCY_CONSTRAINTS.minConfidence.max);
+    });
+
+    it('falls back to default for NaN/non-number minConfidence', () => {
+      expect(
+        validateOccupancyOptions({ minConfidence: NaN }).minConfidence
+      ).toBe(DEFAULT_RECORDING_OPTIONS.occupancy.minConfidence);
+      expect(
+        validateOccupancyOptions({
+          minConfidence: 'lots' as unknown as number,
+        }).minConfidence
+      ).toBe(DEFAULT_RECORDING_OPTIONS.occupancy.minConfidence);
+    });
   });
 
   describe('validateFrameTileDisplayOptions', () => {
@@ -925,7 +971,7 @@ describe('recording-options', () => {
           resolutionDivisor: 2,
         },
         arCrashIsolation: { ...DEFAULT_RECORDING_OPTIONS.arCrashIsolation },
-        occupancy: { cellSizeM: 0.1 },
+        occupancy: { cellSizeM: 0.1, minConfidence: 3 },
         frameTileDisplay: { divisor: 4 },
         visualization: { ...DEFAULT_RECORDING_OPTIONS.visualization },
         qr: { ...DEFAULT_RECORDING_OPTIONS.qr },

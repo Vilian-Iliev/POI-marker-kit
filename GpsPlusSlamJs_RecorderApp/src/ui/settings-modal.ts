@@ -58,6 +58,8 @@ let arCameraTextureEnabledCheckbox: HTMLInputElement | null = null;
 let arChromiumProjectionLayerWorkaroundCheckbox: HTMLInputElement | null = null;
 let occupancyCellSizeSlider: HTMLInputElement | null = null;
 let occupancyCellSizeValue: HTMLElement | null = null;
+let occupancyMinConfidenceSlider: HTMLInputElement | null = null;
+let occupancyMinConfidenceValue: HTMLElement | null = null;
 let frameTileDisplayDivisorSlider: HTMLInputElement | null = null;
 let frameTileDisplayDivisorValue: HTMLElement | null = null;
 let vizFrameTilesCheckbox: HTMLInputElement | null = null;
@@ -153,6 +155,12 @@ export function initSettingsModal(
     'occupancy-cell-size'
   ) as HTMLInputElement;
   occupancyCellSizeValue = document.getElementById('occupancy-cell-size-value');
+  occupancyMinConfidenceSlider = document.getElementById(
+    'occupancy-min-confidence'
+  ) as HTMLInputElement;
+  occupancyMinConfidenceValue = document.getElementById(
+    'occupancy-min-confidence-value'
+  );
   frameTileDisplayDivisorSlider = document.getElementById(
     'frame-tile-display-divisor'
   ) as HTMLInputElement;
@@ -248,6 +256,21 @@ export function initSettingsModal(
       const cm = parseInt(occupancyCellSizeSlider.value, 10);
       workingOptions.occupancy.cellSizeM = cm / 100;
       occupancyCellSizeValue.textContent = `${cm} cm`;
+    }
+  });
+
+  // Voxel noise filter: minimum observations before a cell is rendered.
+  // Integer count (occupancy.minConfidence); 1 = unfiltered.
+  occupancyMinConfidenceSlider?.addEventListener('input', () => {
+    if (
+      workingOptions &&
+      occupancyMinConfidenceSlider &&
+      occupancyMinConfidenceValue
+    ) {
+      const n = parseInt(occupancyMinConfidenceSlider.value, 10);
+      workingOptions.occupancy.minConfidence = n;
+      occupancyMinConfidenceValue.textContent =
+        n === 1 ? '1 (unfiltered)' : String(n);
     }
   });
 
@@ -575,6 +598,27 @@ function populateForm(options: RecordingOptions): void {
   }
   if (occupancyCellSizeValue) {
     occupancyCellSizeValue.textContent = `${Math.round(options.occupancy.cellSizeM * 100)} cm`;
+  }
+
+  // Occupancy noise filter — integer observation count (no unit conversion).
+  if (occupancyMinConfidenceSlider) {
+    occupancyMinConfidenceSlider.min = String(
+      OCCUPANCY_CONSTRAINTS.minConfidence.min
+    );
+    occupancyMinConfidenceSlider.max = String(
+      OCCUPANCY_CONSTRAINTS.minConfidence.max
+    );
+    occupancyMinConfidenceSlider.step = String(
+      OCCUPANCY_CONSTRAINTS.minConfidence.step
+    );
+    occupancyMinConfidenceSlider.value = String(
+      options.occupancy.minConfidence
+    );
+  }
+  if (occupancyMinConfidenceValue) {
+    const n = options.occupancy.minConfidence;
+    occupancyMinConfidenceValue.textContent =
+      n === 1 ? '1 (unfiltered)' : String(n);
   }
 
   // Frame-tile display-resolution divisor (D7-resolution)

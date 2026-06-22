@@ -12,7 +12,7 @@ User-configurable recording options for controlling high-frequency data streams 
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `DepthCaptureOptions`     | Config for depth sampling: `enabled`, `intervalMs`, `gridSize`, `rgb`                                              |
 | `ImageCaptureOptions`     | Config for image capture: `enabled`, `intervalMs`, `quality`, `resolutionDivisor`                                  |
-| `OccupancyOptions`        | Config for the derived occupancy grid: `cellSizeM` (voxel edge length, metres)                                     |
+| `OccupancyOptions`        | Config for the derived occupancy grid: `cellSizeM` (voxel edge length, metres), `minConfidence` (noise filter, min observations to render)                                     |
 | `FrameTileDisplayOptions` | Frame-tile display-texture resolution: `divisor` (1=full…8=eighth, default 2). Display-only, distinct from capture |
 | `VisualizationOptions`    | Live debug-overlay toggles: `frameTiles`, `occupancyCubes`, `gpsAlignmentMarkers`, `compassCubes` (all default ON) |
 | `QrCaptureOptions`        | Live QR detection + RAW recording: `enabled` (default **OFF**, opt-in), `intervalMs`, `captureSize`                |
@@ -28,7 +28,7 @@ User-configurable recording options for controlling high-frequency data streams 
 | `cloneRecordingOptions(options)`           | `RecordingOptions`                 | `RecordingOptions`        | Deep copy                                                                                 |
 | `validateDepthOptions(partial)`            | `Partial<DepthCaptureOptions>`     | `DepthCaptureOptions`     | Validates and clamps; rounds `gridSize` to an integer (N×N grid) so it applies downstream |
 | `validateImageOptions(partial)`            | `Partial<ImageCaptureOptions>`     | `ImageCaptureOptions`     | Validates and clamps values                                                               |
-| `validateOccupancyOptions(partial)`        | `Partial<OccupancyOptions>`        | `OccupancyOptions`        | Clamps `cellSizeM`; rejects NaN/Infinity to default                                       |
+| `validateOccupancyOptions(partial)`        | `Partial<OccupancyOptions>`        | `OccupancyOptions`        | Clamps `cellSizeM`; rounds + clamps `minConfidence` (1–10); rejects NaN/Infinity to default                                       |
 | `validateFrameTileDisplayOptions(partial)` | `Partial<FrameTileDisplayOptions>` | `FrameTileDisplayOptions` | Clamps `divisor` to 1–8 + rounds to integer; rejects NaN/Infinity to default              |
 | `validateVisualizationOptions(partial)`    | `Partial<VisualizationOptions>`    | `VisualizationOptions`    | Boolean-or-default per field (missing/corrupted → ON)                                     |
 | `validateQrOptions(partial)`               | `Partial<QrCaptureOptions>`        | `QrCaptureOptions`        | `enabled` boolean-or-default (→ OFF); clamps `intervalMs`/`captureSize`, NaN → default    |
@@ -42,7 +42,7 @@ User-configurable recording options for controlling high-frequency data streams 
 | `DEFAULT_RECORDING_OPTIONS`      | Default values (all enabled)                          |
 | `DEPTH_CONSTRAINTS`              | Min/max/step for depth options                        |
 | `IMAGE_CONSTRAINTS`              | Min/max/step for image options                        |
-| `OCCUPANCY_CONSTRAINTS`          | Min/max/step for `cellSizeM` (metres)                 |
+| `OCCUPANCY_CONSTRAINTS`          | Min/max/step for `cellSizeM` (metres) and `minConfidence` (count) |
 | `FRAME_TILE_DISPLAY_CONSTRAINTS` | Min/max/step for `frameTileDisplay.divisor`           |
 | `QR_CONSTRAINTS`                 | Min/max/step for `qr.intervalMs` and `qr.captureSize` |
 
@@ -59,7 +59,7 @@ User-configurable recording options for controlling high-frequency data streams 
 {
   depth: { enabled: true, intervalMs: 1000, gridSize: 16, rgb: true },
   images: { enabled: true, intervalMs: 2000, quality: 0.7, resolutionDivisor: 1 },
-  occupancy: { cellSizeM: 0.15 },
+  occupancy: { cellSizeM: 0.15, minConfidence: 3 },
   frameTileDisplay: { divisor: 2 },
   visualization: { frameTiles: true, occupancyCubes: true, gpsAlignmentMarkers: true, compassCubes: true },
   qr: { enabled: false, intervalMs: 125, captureSize: 1024 }
@@ -86,11 +86,14 @@ User-configurable recording options for controlling high-frequency data streams 
 | `images.quality`           | 0.3  | 1.0   |
 | `images.resolutionDivisor` | 1    | 8     |
 | `occupancy.cellSizeM` (m)  | 0.01 | 0.20  |
+| `occupancy.minConfidence`  | 1    | 10    |
 | `frameTileDisplay.divisor` | 1    | 8     |
 | `qr.intervalMs` (ms)       | 50   | 1000  |
 | `qr.captureSize` (px)      | 256  | 2048  |
 
 `occupancy.cellSizeM` is clamped to 1–20 cm: cell count scales as 1/cellSize³, so sub-cm voxels are both a memory/perf cliff and below the depth-sensor noise floor. A non-finite stored value (NaN/Infinity) falls back to the default rather than being clamped, because `OccupancyGrid` throws a `RangeError` on a non-finite cell size.
+
+`occupancy.minConfidence` (default **3**) is the voxel noise filter: the minimum observation `count` before a cell is rendered/used, forwarded to `getOccupiedCells(minObservations)`. It is rounded to an integer and clamped to 1–10 (1 = unfiltered/legacy); NaN/non-number falls back to the default. Raising it suppresses single-frame depth noise — notably the **behind-surface** phantoms (e.g. below the floor) that free-space carving can never clear. See `GpsPlusSlamJs_Docs/docs/2026-06-22-occupancy-grid-behind-surface-noise-plan.md`.
 
 ## Examples
 

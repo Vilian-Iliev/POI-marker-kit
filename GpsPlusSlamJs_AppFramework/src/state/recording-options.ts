@@ -110,6 +110,20 @@ export interface OccupancyOptions {
    * on the next session rather than mid-session.
    */
   cellSizeM: number;
+  /**
+   * Minimum observation count for a voxel to be trusted as occupied (the
+   * grid's `getOccupiedCells(minObservations)` floor, promoted to a user
+   * setting). A cell is marked occupied the instant one noisy depth point
+   * lands in it; raising this filters single-frame depth noise — in
+   * particular the **behind-surface** phantoms (e.g. below the floor) that
+   * free-space carving can never clear because no ray passes through occluded
+   * space. Default 3 (1 = unfiltered/legacy). Higher = less noise but
+   * briefly-glimpsed real surfaces may be dropped, so it is exposed for
+   * on-device tuning. Read once when the visualizer is constructed (Enter-AR
+   * / replay load). See
+   * `GpsPlusSlamJs_Docs/docs/2026-06-22-occupancy-grid-behind-surface-noise-plan.md`.
+   */
+  minConfidence: number;
 }
 
 /**
@@ -244,6 +258,7 @@ export const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
   },
   occupancy: {
     cellSizeM: 0.15, // 15 cm voxels — matches OccupancyGrid's own default (Unity parity)
+    minConfidence: 3, // ≥3 observations to render a voxel — filters single-frame depth noise (1 = legacy/unfiltered)
   },
   frameTileDisplay: {
     // Half-resolution display texture by default (D7): a noticeable per-tile
@@ -291,9 +306,15 @@ export const IMAGE_CONSTRAINTS = {
  * `points3D` row count) scales as 1/cellSize³ — sub-centimetre voxels are both
  * a memory/perf cliff on a phone and below the depth sensor's noise floor.
  * Step is 1 cm (the settings slider operates in cm).
+ *
+ * `minConfidence` is clamped to 1–10 (integer). 1 disables the filter (legacy
+ * behaviour: a single observation counts as occupied); the ceiling exists
+ * because real surfaces accumulate only a handful of observations per second
+ * of dwell, so a floor above ~10 would start hiding genuine geometry.
  */
 export const OCCUPANCY_CONSTRAINTS = {
   cellSizeM: { min: 0.01, max: 0.2, step: 0.01 },
+  minConfidence: { min: 1, max: 10, step: 1 },
 } as const;
 
 /**
@@ -519,6 +540,17 @@ export function validateOccupancyOptions(
         : defaults.cellSizeM,
       OCCUPANCY_CONSTRAINTS.cellSizeM.min,
       OCCUPANCY_CONSTRAINTS.cellSizeM.max
+    ),
+    // Round before clamping so a fractional stored value resolves to a valid
+    // integer threshold; NaN/non-finite falls back to the default (clamp would
+    // otherwise pass NaN straight through, and getOccupiedCells expects an int).
+    minConfidence: clamp(
+      typeof options.minConfidence === 'number' &&
+        Number.isFinite(options.minConfidence)
+        ? Math.round(options.minConfidence)
+        : defaults.minConfidence,
+      OCCUPANCY_CONSTRAINTS.minConfidence.min,
+      OCCUPANCY_CONSTRAINTS.minConfidence.max
     ),
   };
 }

@@ -1284,7 +1284,12 @@ async function handleEnterAR(): Promise<void> {
           clear(): void;
         } = viz.occupancyCubes
           ? (occupancyCubesVisualizer = new OccupancyCubesVisualizer(
-              arWorldGroup
+              arWorldGroup,
+              // Noise filter: only render voxels seen ≥ minConfidence times
+              // (recording-options `occupancy.minConfidence`, default 3). Read
+              // here so a changed value applies on the next Enter-AR, same as
+              // cellSizeM above.
+              { minObservations: recordingOptions.occupancy.minConfidence }
             ))
           : { refresh: () => {}, clear: () => {} };
         unsubscribeOccupancyGrid = wireOccupancyGridSubscribers({

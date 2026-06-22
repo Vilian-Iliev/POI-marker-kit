@@ -291,7 +291,7 @@ vi.mock('gps-plus-slam-app-framework/state/recording-options', () => ({
     qr: { enabled: false, intervalMs: 125, captureSize: 1024 },
     images: { enabled: false, intervalMs: 1000, quality: 0.8 },
     depth: { enabled: false, intervalMs: 1000 },
-    occupancy: { cellSizeM: 0.15 },
+    occupancy: { cellSizeM: 0.15, minConfidence: 3 },
     frameTileDisplay: { divisor: 2 },
     visualization: {
       frameTiles: true,
@@ -463,7 +463,12 @@ describe('Occupancy-grid cube wiring in live AR', () => {
     // grid's cells are raw-WebXR coordinates that only register with the
     // real world when they ride the alignment matrix like the camera does
     // (port plan Iter 7 reparenting fix).
-    expect(mockVisualizerCtor).toHaveBeenCalledWith(mockGetArWorldGroup());
+    // arWorldGroup as parent, plus the noise filter forwarded from the
+    // recorder setting (occupancy.minConfidence → visualizer.minObservations,
+    // 2026-06-22 behind-surface-noise plan).
+    expect(mockVisualizerCtor).toHaveBeenCalledWith(mockGetArWorldGroup(), {
+      minObservations: 3,
+    });
     expect(mockVisualizerCtor).not.toHaveBeenCalledWith(mockGetScene());
     expect(mockWireOccupancyGridSubscribers).toHaveBeenCalledTimes(1);
 

@@ -193,11 +193,15 @@ export async function startReplayMode(
     // resolution without re-capturing — 2026-06-13 occupancy-grid-settings
     // review, item 1. `loadRecordingOptions` is self-defending (returns the
     // validated default on any storage error), so this stays best-effort.
+    const occupancyOptions = loadRecordingOptions().occupancy;
     const occupancyGrid = new OccupancyGrid({
-      cellSizeM: loadRecordingOptions().occupancy.cellSizeM,
+      cellSizeM: occupancyOptions.cellSizeM,
     });
+    // Same noise filter as live (main.ts): render only voxels seen ≥
+    // minConfidence times, re-quantizable per replay like cellSizeM.
     occupancyCubesVisualizer = new OccupancyCubesVisualizer(
-      replaySceneState.arWorldGroup
+      replaySceneState.arWorldGroup,
+      { minObservations: occupancyOptions.minConfidence }
     );
     unsubscribeOccupancyGrid = wireOccupancyGridSubscribers({
       storeRef: createStoreRef(store),
