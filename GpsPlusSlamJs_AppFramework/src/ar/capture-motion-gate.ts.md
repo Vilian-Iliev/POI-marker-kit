@@ -1,0 +1,59 @@
+# `capture-motion-gate.ts`
+
+- **Purpose:** the policy that decides whether a _due_ image capture fires on
+  the current frame or is deferred until device motion settles, so that
+  motion-blurred frames are skipped.
+
+- **Public API:**
+  - `decideCapture(input): 'capture' | 'defer'` — stateless decision over
+    `{ windowMaxAngular, windowMaxLinear, maxAngularVelocity, maxLinearVelocity,
+msSinceDue, maxWaitMs }`.
+    - Returns `'capture'` when both windowed maxima are at/below their
+      thresholds (calm), OR when `msSinceDue >= maxWaitMs` (never-calm safety
+      fallback). Otherwise `'defer'`.
+  - `class MotionWindow(size?, angularGlitchCeiling?, linearGlitchCeiling?)` —
+    fixed-size ring of recent valid velocity pairs.
+    - `push(angularVel, linearVel): boolean` — records a sample; returns
+      `false` and stores nothing if it exceeds a glitch ceiling or is
+      non-finite.
+    - `maxAngular()` / `maxLinear()` — max over the window, or `Infinity` when
+      empty (so "no data" reads as not-calm).
+    - `reset()` — clear (on tracking loss / capture restart).
+  - Constants: `DEFAULT_MOTION_WINDOW_SIZE` (3), `ANGULAR_GLITCH_CEILING_RAD_S`
+    (50), `LINEAR_GLITCH_CEILING_M_S` (20).
+
+- **Invariants & assumptions:**
+  - **Empty window ⇒ `Infinity` ⇒ not calm.** No capture can fire before at
+    least one valid sample exists (except via the `maxWaitMs` fallback).
+  - **Glitch rejection never pollutes the window.** A relocalization spike is
+    dropped, so it cannot force a spurious defer; the manager additionally
+    refuses to capture _on_ a glitch frame (see `image-capture.ts`).
+  - The gate **only ever delays** a capture; it never advances one.
+  - Window size + glitch ceilings are internal constants, not user config — the
+    user surface is only `enabled`/`maxAngular`/`maxLinear`/`maxWaitMs`.
+  - Both windowed maxima are compared (not the instantaneous linear sample) so
+    linear motion is judged as robustly as angular (plan §4.2).
+
+- **Examples:**
+
+  ```ts
+  const win = new MotionWindow();
+  win.push(0.2, 0.1); // valid
+  win.push(1000, 0); // glitch -> rejected, returns false
+  decideCapture({
+    windowMaxAngular: win.maxAngular(),
+    windowMaxLinear: win.maxLinear(),
+    maxAngularVelocity: 0.6,
+    maxLinearVelocity: 0.5,
+    msSinceDue: 0,
+    maxWaitMs: 4000,
+  }); // 'capture' (calm)
+  ```
+
+- **Tests:** `capture-motion-gate.test.ts` — calm→capture, fast→defer, fallback
+  fires at `maxWaitMs`, glitch rejected without polluting the window, empty
+  window not calm.
+
+- **Related docs:**
+  `GpsPlusSlamJs_Docs/docs/2026-06-23-blurry-frame-motion-gating-plan.md`
+  (§4.2-4.4), `pose-motion.ts.md`, `image-capture.ts.md`.
