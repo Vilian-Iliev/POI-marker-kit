@@ -580,7 +580,12 @@ export class ImageCaptureManager {
     this.awaitingVerdict = true;
     let settled = false;
     const finish = (accept: boolean, viaTimeout: boolean): void => {
-      if (settled) return;
+      // `stop()` cannot reach this per-attempt closure (settled is local), so a
+      // verdict still in flight at teardown — including the fail-open resolution
+      // `dispose()` triggers on stop — would otherwise run saveCapture →
+      // onCaptured on a stopped session, writing a frame after endSession that
+      // the recorded frameCount never saw. Drop a late verdict once stopped.
+      if (settled || !this.capturing) return;
       settled = true;
       this.clearVerdictTimeout();
       this.awaitingVerdict = false;

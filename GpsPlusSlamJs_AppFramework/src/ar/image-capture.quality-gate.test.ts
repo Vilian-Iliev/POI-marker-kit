@@ -184,6 +184,40 @@ describe('ImageCaptureManager — image-quality gate', () => {
     );
   });
 
+  it('does not save a frame when the verdict resolves after stop()', async () => {
+    // Reachable on every stop with the gate enabled: performStop() calls
+    // imageQualityClient.dispose(), whose contract is to fail-open in-flight
+    // analyses (resolve accept:true). Without a `!this.capturing` guard in
+    // `finish`, that late resolution runs saveCapture → onCaptured AFTER the
+    // session has stopped (and after endSession), writing a frame that is not
+    // reflected in the already-recorded frameCount.
+    let resolveVerdict!: (v: FrameQualityVerdict) => void;
+    (mockCallbacks.analyzeFrame as unknown as ReturnType<typeof vi.fn>) = vi.fn(
+      () =>
+        new Promise<FrameQualityVerdict>((r) => {
+          resolveVerdict = r;
+        })
+    );
+    manager = new ImageCaptureManager(
+      mockCanvas,
+      mockCallbacks,
+      qualityOnlyConfig()
+    );
+    manager.start();
+
+    await step(1000); // captured → analyze in flight (awaitingVerdict), no verdict
+    expect(captured()).toHaveLength(0);
+
+    manager.stop(); // session stops while the verdict is still in flight
+
+    resolveVerdict({ accept: true }); // late fail-open resolution (e.g. from dispose)
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The late verdict must NOT save a frame on the stopped session.
+    expect(captured()).toHaveLength(0);
+    expect(manager.getFrameCount()).toBe(0);
+  });
+
   it('saves immediately (legacy path) when no analyzer is injected', async () => {
     const { analyzeFrame: _omit, ...noAnalyze } = mockCallbacks;
     manager = new ImageCaptureManager(
