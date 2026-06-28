@@ -161,12 +161,14 @@ export interface RecorderStoreOptions {
   /** Override the bundled community license key. */
   licenseKey?: string;
   /**
-   * Debug/experiment compass alignment opt-ins (Phase-4). Each is forwarded to
-   * `createSlamAppStore`, which enables it on the `gpsData` slice once that slice
-   * exists (after the first `setZeroPos`). All default OFF ⇒ byte-identical solve.
-   * Sourced from `RecordingOptions.compassDebug` so the operator toggles them in
-   * the recorder settings. NB: the resulting `gpsData` actions persist into the
-   * recording (replay re-enables them) — record calibration sets with these OFF.
+   * Compass alignment opt-ins (Phase-4). Each is forwarded to `createSlamAppStore`,
+   * which enables it on the `gpsData` slice once that slice exists (after the
+   * first `setZeroPos`). Sourced from `RecordingOptions.compassDebug` so the
+   * operator toggles them in the recorder settings. Defaults follow the framework:
+   * **Stage 0 (`enableCompassColdStartOverride`) defaults ON** (field-validated),
+   * Stage C + the consistency gate default OFF (field-gated). NB: the resulting
+   * `gpsData` actions persist into the recording (replay re-enables them) — turn
+   * Stage 0 OFF for §6a calibration captures so the compass behaviour is unmodified.
    */
   enableCompassColdStartOverride?: boolean;
   enableCompassRotationPrior?: boolean;

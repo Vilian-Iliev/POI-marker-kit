@@ -501,6 +501,9 @@ describe('Recorder Store', () => {
       const store1 = createRecorderStore({
         storageBackend: spyBackend1,
         enableDevChecks: false,
+        // Keep the action stream focused on the indexing concern: the default-on
+        // Stage-0 opt-in would inject an extra setColdStartOverrideEnabled action.
+        enableCompassColdStartOverride: false,
       });
 
       // Start session on store1 to enable persistence
@@ -529,6 +532,7 @@ describe('Recorder Store', () => {
       createRecorderStore({
         storageBackend: spyBackend2,
         enableDevChecks: false,
+        enableCompassColdStartOverride: false,
       });
 
       // Dispatch on store1 again — index must continue at 3, not restart at 1
@@ -840,7 +844,12 @@ describe('Recorder Store', () => {
       const backend = new NullStorageBackend();
       const spy = vi.spyOn(backend, 'writeAction');
 
-      const replayStore = createRecorderStore({ storageBackend: backend });
+      // Stage-0 opt-in off: this test counts the two persisted actions, and the
+      // default-on opt-in would add a third (setColdStartOverrideEnabled).
+      const replayStore = createRecorderStore({
+        storageBackend: backend,
+        enableCompassColdStartOverride: false,
+      });
 
       replayStore.dispatch(
         startSession({
@@ -1032,13 +1041,25 @@ describe('Recorder Store', () => {
       expect(g?.compassWebXRConsistencyEnabled).toBe(true);
     });
 
-    it('leaves all three compass flags off by default', () => {
+    it('inherits the framework defaults when no flags passed (Stage 0 on, others off)', async () => {
+      // createRecorderStore forwards undefined → createSlamAppStore applies its
+      // defaults: Stage 0 (cold-start override) is a default-on feature, while
+      // Stage C + the consistency gate stay field-gated (off). The opt-in is
+      // applied async after gpsData exists, hence the await.
       const s = createRecorderStore();
       s.dispatch(setZeroPos({ lat: 0, lon: 0 }));
+      await Promise.resolve();
       const g = s.getState().gpsData;
-      expect(g?.coldStartOverrideEnabled).toBeFalsy();
+      expect(g?.coldStartOverrideEnabled).toBe(true);
       expect(g?.compassRotationPriorEnabled).toBeFalsy();
       expect(g?.compassWebXRConsistencyEnabled).toBeFalsy();
+    });
+
+    it('opts out of Stage 0 when enableCompassColdStartOverride: false', async () => {
+      const s = createRecorderStore({ enableCompassColdStartOverride: false });
+      s.dispatch(setZeroPos({ lat: 0, lon: 0 }));
+      await Promise.resolve();
+      expect(s.getState().gpsData?.coldStartOverrideEnabled).toBeFalsy();
     });
   });
 });

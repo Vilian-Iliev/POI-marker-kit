@@ -1321,10 +1321,12 @@ No errors</pre
             </div>
             <div class="bg-gray-700/50 rounded-lg p-3 space-y-3">
               <p class="text-[11px] text-gray-400">
-                Experimental — feed the absolute-orientation compass into the
-                live GPS alignment. Applies on the next session / reload. These
-                flags are recorded into the session (replay re-enables them), so
-                record calibration sets with all OFF.
+                Feed the absolute-orientation compass into the live GPS
+                alignment. Stage 0 is ON by default (fixes initial rotation);
+                Stage C + the trust gate are experimental (off). Applies on the
+                next session / reload. These flags are recorded into the session
+                (replay re-enables them), so turn Stage 0 OFF for compass
+                calibration sets.
               </p>
               <label class="flex items-center gap-2 cursor-pointer">
                 <input
@@ -1333,8 +1335,8 @@ No errors</pre
                   class="w-4 h-4 accent-blue-500"
                 />
                 <span class="text-sm text-gray-200"
-                  >Stage 0 — cold-start override (fixes initial rotation
-                  jumping)</span
+                  >Stage 0 — cold-start override (on by default; fixes initial
+                  rotation jumping)</span
                 >
               </label>
               <label class="flex items-center gap-2 cursor-pointer">

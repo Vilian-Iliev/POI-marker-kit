@@ -882,45 +882,58 @@ describe('settings-modal', () => {
     });
   });
 
-  describe('compass alignment debug toggles (Phase-4)', () => {
-    // Why: the three compass alignment opt-ins (Stage 0 / Stage C / consistency
-    // gate) must default OFF (byte-identical solve) and round-trip through the
-    // settings UI: populate from saved options + persist a change to storage.
+  describe('compass alignment toggles (Phase-4)', () => {
+    // Why: the three compass alignment flags must round-trip through the settings
+    // UI (populate from saved options + persist a change). Stage 0
+    // (coldStartOverride) is a default-ON feature; Stage C + the consistency gate
+    // stay experimental (default OFF) so a stray persisted value can't silently
+    // enable them.
     const COMPASS_IDS = [
       ['compass-cold-start-override', 'coldStartOverride'],
       ['compass-rotation-prior', 'rotationPrior'],
       ['compass-webxr-consistency', 'webXRConsistency'],
     ] as const;
 
-    it('all three default to unchecked (OFF) — byte-identical solve', () => {
+    const COMPASS_DEFAULT_CHECKED: Record<
+      (typeof COMPASS_IDS)[number][1],
+      boolean
+    > = {
+      coldStartOverride: true,
+      rotationPrior: false,
+      webXRConsistency: false,
+    };
+
+    it('default checkbox states match the per-flag defaults (Stage 0 on, others off)', () => {
       initSettingsModal();
       showSettingsModal();
-      for (const [id] of COMPASS_IDS) {
+      for (const [id, key] of COMPASS_IDS) {
         const cb = document.getElementById(id) as HTMLInputElement | null;
         expect(cb, id).not.toBeNull();
-        expect(cb!.checked, id).toBe(false);
+        expect(cb!.checked, id).toBe(COMPASS_DEFAULT_CHECKED[key]);
       }
     });
 
     it.each(COMPASS_IDS)(
-      'persists %s → compassDebug.%s when checked',
+      'persists a toggle of %s independently of the other flags',
       (id, key) => {
         initSettingsModal();
         showSettingsModal();
 
         const cb = document.getElementById(id) as HTMLInputElement;
-        expect(cb.checked).toBe(false);
-        cb.checked = true;
+        const target = !COMPASS_DEFAULT_CHECKED[key];
+        expect(cb.checked).toBe(COMPASS_DEFAULT_CHECKED[key]);
+        cb.checked = target;
         cb.dispatchEvent(new Event('change'));
 
         document.getElementById('btn-settings-save')?.click();
 
-        expect(loadRecordingOptions().compassDebug[key]).toBe(true);
-        // The other compass flags remain OFF — toggles are independent.
+        const saved = loadRecordingOptions().compassDebug;
+        expect(saved[key]).toBe(target);
+        // The other compass flags stay at their defaults — toggles are independent.
         for (const [otherId, otherKey] of COMPASS_IDS) {
           if (otherKey === key) continue;
-          expect(loadRecordingOptions().compassDebug[otherKey], otherId).toBe(
-            false
+          expect(saved[otherKey], otherId).toBe(
+            COMPASS_DEFAULT_CHECKED[otherKey]
           );
         }
       }
@@ -936,6 +949,22 @@ describe('settings-modal', () => {
 
       const cb = document.getElementById(id) as HTMLInputElement | null;
       expect(cb?.checked).toBe(true);
+    });
+
+    it('populates compass-cold-start-override UNCHECKED from a saved OFF value (opt-out round-trip)', () => {
+      // The recorder off-toggle: a persisted coldStartOverride:false must survive
+      // load → populate as an unchecked box so the operator can disable Stage 0.
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ compassDebug: { coldStartOverride: false } })
+      );
+
+      initSettingsModal();
+      showSettingsModal();
+
+      const cb = document.getElementById(
+        'compass-cold-start-override'
+      ) as HTMLInputElement | null;
+      expect(cb?.checked).toBe(false);
     });
   });
 
