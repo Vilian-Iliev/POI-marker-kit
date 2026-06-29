@@ -129,6 +129,25 @@ describe('opfs-storage', () => {
       expect(result.sessionName).toMatch(/^recording-2026-01-26_10-30-00utc$/);
     });
 
+    it('disambiguates two sessions started in the same UTC second', async () => {
+      // Why: `formatTimestamp` resolves to whole UTC seconds, so two recordings
+      // started within the same second would otherwise resolve to the SAME
+      // `recording-<ts>/` directory — `getDirectoryHandle(..., {create:true})`
+      // returns the existing handle, silently MIXING both recordings'
+      // session.json/actions/frames. A stop-then-immediate-restart within one
+      // second is the realistic trigger. The second session must own a
+      // distinct directory, while the first keeps the bare timestamp name.
+      const result1 = await createSession(new Date('2026-01-26T10:30:00Z'));
+      const handle1 = getSessionHandle();
+      const result2 = await createSession(new Date('2026-01-26T10:30:00Z'));
+      const handle2 = getSessionHandle();
+
+      expect(result1.sessionName).toBe('recording-2026-01-26_10-30-00utc');
+      expect(result2.sessionName).not.toBe(result1.sessionName);
+      expect(handle2).not.toBe(handle1);
+      expect(handle2).not.toBeNull();
+    });
+
     it('throws if initOpfsStorage was not called', async () => {
       // Why: Must enforce initialization order
       resetOpfsStorage();

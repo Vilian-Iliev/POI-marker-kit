@@ -217,12 +217,34 @@ export function getAppRootHandle(): FileSystemDirectoryHandle | null {
 // ============================================================================
 
 /**
+ * True when a session directory named `name` already exists under `dir`.
+ * Used by {@link createSession} to avoid silently reusing a directory when two
+ * recordings start within the same (second-resolution) timestamp.
+ */
+async function sessionDirExists(
+  dir: FileSystemDirectoryHandle,
+  name: string
+): Promise<boolean> {
+  try {
+    await dir.getDirectoryHandle(name, { create: false });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Create a new recording session.
  *
  * Creates the directory structure:
  * - /gps-plus-slam/sessions/recording-{timestamp}/
  * - /gps-plus-slam/sessions/recording-{timestamp}/actions/
  * - /gps-plus-slam/sessions/recording-{timestamp}/images/ (legacy: frames/)
+ *
+ * The folder name is `recording-{timestamp}` at whole-second resolution; if a
+ * directory with that name already exists (two recordings started in the same
+ * UTC second), a numeric suffix (`-2`, `-3`, …) is appended so the new session
+ * never silently reuses and corrupts the earlier one's directory.
  *
  * @param timestamp - Session start time (used for folder naming)
  * @param _contextTag - Opaque tag; not used by the flat layout but accepted
@@ -240,7 +262,19 @@ export async function createSession(
     );
   }
 
-  const sessionName = `recording-${formatTimestamp(timestamp)}`;
+  // `formatTimestamp` resolves to whole UTC seconds, so two recordings started
+  // within the same second collide on `recording-<ts>/`. Because the handle is
+  // opened with `{ create: true }`, a colliding name silently REUSES the
+  // existing directory and mixes both recordings' session.json/actions/frames.
+  // Probe for a free name and append a numeric suffix on collision so each
+  // session owns a distinct directory (the first keeps the bare timestamp).
+  const baseName = `recording-${formatTimestamp(timestamp)}`;
+  let sessionName = baseName;
+  let suffix = 1;
+  while (await sessionDirExists(sessionsDir, sessionName)) {
+    suffix += 1;
+    sessionName = `${baseName}-${suffix}`;
+  }
   currentSessionHandle = await sessionsDir.getDirectoryHandle(sessionName, {
     create: true,
   });
