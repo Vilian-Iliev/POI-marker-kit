@@ -26,6 +26,9 @@ const entryFiles = [
   'src/ar/chromium-camera-access-workaround.ts',
   'src/ar/depth-grid-lookup.ts',
   'src/ar/depth-sampler.ts',
+  // Live CPU-depth occluder — deep-importable (`./ar/*` wildcard), consumed by
+  // the recorder's live-occlusion wiring, so it must be built per-file.
+  'src/ar/depth-occluder.ts',
   'src/ar/depth-unprojection.ts',
   'src/ar/occupancy-grid.ts',
   // Pure voxel→surface mesher — deep-importable (the `./ar/*` wildcard
