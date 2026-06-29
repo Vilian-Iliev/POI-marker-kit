@@ -222,7 +222,9 @@ export async function startReplayMode(
     );
     // Persistent depth-only occluder (opt-in, off by default), re-quantizable
     // per replay like the cubes. Snapshots the same minConfidence floor.
-    const occluderSink = occupancyOptions.occlusionMeshEnabled
+    // (Live occlusion is live-AR-only — replay has no live depth stream — so
+    // only the persistent flag is honoured here.)
+    const occluderSink = occupancyOptions.persistentOcclusion
       ? ((occlusionMesh = new OcclusionMesh(replaySceneState.arWorldGroup)),
         {
           refresh: (g: OccupancyGrid) =>

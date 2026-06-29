@@ -162,11 +162,11 @@ describe('settings-modal', () => {
       expect(html).toContain('id="occupancy-min-confidence-value"');
     });
 
-    it('includes the persistent occlusion-mesh checkbox', () => {
+    it('includes the persistent mesh-occluder checkbox', () => {
       // 2026-06-13 occupancy-mesh-options plan: the persistent depth-only
-      // occluder (occupancy.occlusionMeshEnabled) must be toggleable here.
+      // occluder (occupancy.persistentOcclusion) must be toggleable here.
       const html = loadSettingsModalHtml();
-      expect(html).toContain('id="occupancy-occlusion-mesh"');
+      expect(html).toContain('id="occupancy-persistent-occlusion"');
     });
 
     it('includes the frame-tile display-resolution slider and value display', () => {
@@ -377,7 +377,10 @@ describe('settings-modal', () => {
       expect(valueDisplay?.textContent).toBe('1 (unfiltered)');
     });
 
-    it('populates the occlusion-mesh checkbox from saved options and updates the working copy', () => {
+    it('populates the persistent-occluder checkbox from saved options (migrating the legacy field) and updates the working copy', () => {
+      // Persisted with the LEGACY single boolean — the options migration must
+      // map occlusionMeshEnabled=true onto persistentOcclusion so the checkbox
+      // reflects it (2026-06-29 two-boolean split).
       localStorageMock.getItem.mockReturnValueOnce(
         JSON.stringify({ occupancy: { occlusionMeshEnabled: true } })
       );
@@ -385,21 +388,21 @@ describe('settings-modal', () => {
       showSettingsModal();
 
       const checkbox = document.getElementById(
-        'occupancy-occlusion-mesh'
+        'occupancy-persistent-occlusion'
       ) as HTMLInputElement;
       expect(checkbox.checked).toBe(true);
 
       // Toggling it off mutates the working options (persisted on Save).
       checkbox.checked = false;
       checkbox.dispatchEvent(new Event('change'));
-      expect(getWorkingOptions()?.occupancy.occlusionMeshEnabled).toBe(false);
+      expect(getWorkingOptions()?.occupancy.persistentOcclusion).toBe(false);
     });
 
-    it('defaults the occlusion-mesh checkbox to off (feature off by default)', () => {
+    it('defaults the persistent-occluder checkbox to off (feature off by default)', () => {
       localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({}));
       showSettingsModal();
       const checkbox = document.getElementById(
-        'occupancy-occlusion-mesh'
+        'occupancy-persistent-occlusion'
       ) as HTMLInputElement;
       expect(checkbox.checked).toBe(false);
     });

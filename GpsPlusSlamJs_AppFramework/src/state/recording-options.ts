@@ -184,8 +184,27 @@ export interface OccupancyOptions {
    * updates) is still pending. Read once when the mesh is wired (Enter-AR /
    * replay load), like the other occupancy knobs. See
    * `GpsPlusSlamJs_Docs/docs/2026-06-13-occupancy-mesh-options-plan.md`.
+   *
+   * **Migration:** this field replaces the former `occlusionMeshEnabled`
+   * boolean — `validateOccupancyOptions` maps a persisted
+   * `occlusionMeshEnabled === true` onto `persistentOcclusion` (see that
+   * function and `2026-06-29-occupancy-mesh-followups.md`).
    */
-  occlusionMeshEnabled: boolean;
+  persistentOcclusion: boolean;
+  /**
+   * Enable the **live CPU-depth occluder** — a per-frame depth occluder that
+   * hides virtual content behind the real surface the camera sees *right now*,
+   * sharp and registration-free (no out-of-view memory). It composes with
+   * {@link persistentOcclusion}: both can be on (the live occluder wins where
+   * this frame has depth, the persistent mesh fills out-of-view / depth holes —
+   * `2026-06-14-webxr-depth-occlusion-plan.md` §5). Requires the
+   * `requestDepthOcclusion` session feature so `cpu-optimized` depth is
+   * negotiated even without depth recording. **Live-AR only** — replay has no
+   * live depth stream, so this flag is a no-op there (persistent still applies).
+   * Default **false**: the live occluder's on-device occlusion quality is still
+   * device-gated/unverified. Read once when the AR session is wired (Enter-AR).
+   */
+  liveOcclusion: boolean;
 }
 
 /**
@@ -337,7 +356,8 @@ export const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
   occupancy: {
     cellSizeM: 0.15, // 15 cm voxels — matches OccupancyGrid's own default (Unity parity)
     minConfidence: 3, // ≥3 observations to render a voxel — filters single-frame depth noise (1 = legacy/unfiltered)
-    occlusionMeshEnabled: false, // persistent depth-only occluder OFF by default (extra cost; on-device gate pending)
+    persistentOcclusion: false, // persistent depth-only mesh occluder OFF by default (extra cost; on-device gate pending)
+    liveOcclusion: false, // live CPU-depth occluder OFF by default (device-gated quality; replay no-op)
   },
   frameTileDisplay: {
     // Half-resolution display texture by default (D7): a noticeable per-tile
@@ -771,11 +791,25 @@ export function validateImageOptions(
  * `RangeError` on a non-finite cell size, and `clamp(NaN, …)` would otherwise
  * pass `NaN` straight through (it is `typeof 'number'`). Falling back to the
  * default keeps a corrupted stored value from crashing grid construction.
+ *
+ * **Backward-compat migration:** the occlusion options were a single
+ * `occlusionMeshEnabled` boolean before 2026-06-29; they are now the two
+ * composable booleans `persistentOcclusion` + `liveOcclusion`. A persisted
+ * object that predates the split carries only the legacy field, so when the new
+ * `persistentOcclusion` is absent we read `occlusionMeshEnabled` and map
+ * `true → persistentOcclusion: true` (the old mesh occluder is the persistent
+ * one); the legacy shape never enabled a live occluder, so `liveOcclusion`
+ * stays at its default. A present new field always wins over the legacy one.
+ * See `2026-06-29-occupancy-mesh-followups.md`.
  */
 export function validateOccupancyOptions(
   options: Partial<OccupancyOptions>
 ): OccupancyOptions {
   const defaults = DEFAULT_RECORDING_OPTIONS.occupancy;
+  // Legacy field (removed from OccupancyOptions): only read for migration.
+  const legacyOcclusionMeshEnabled = (
+    options as { occlusionMeshEnabled?: unknown }
+  ).occlusionMeshEnabled;
   return {
     cellSizeM: clamp(
       typeof options.cellSizeM === 'number' &&
@@ -796,10 +830,20 @@ export function validateOccupancyOptions(
       OCCUPANCY_CONSTRAINTS.minConfidence.min,
       OCCUPANCY_CONSTRAINTS.minConfidence.max
     ),
-    occlusionMeshEnabled:
-      typeof options.occlusionMeshEnabled === 'boolean'
-        ? options.occlusionMeshEnabled
-        : defaults.occlusionMeshEnabled,
+    // New field wins; else migrate the legacy boolean (true → persistent on);
+    // else default off.
+    persistentOcclusion:
+      typeof options.persistentOcclusion === 'boolean'
+        ? options.persistentOcclusion
+        : typeof legacyOcclusionMeshEnabled === 'boolean'
+          ? legacyOcclusionMeshEnabled
+          : defaults.persistentOcclusion,
+    // The legacy single-toggle never drove a live occluder, so there is nothing
+    // to migrate here — boolean-or-default only.
+    liveOcclusion:
+      typeof options.liveOcclusion === 'boolean'
+        ? options.liveOcclusion
+        : defaults.liveOcclusion,
   };
 }
 

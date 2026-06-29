@@ -54,7 +54,7 @@ export interface WireOccupancyGridSubscribersOptions<
    * refreshed on the **same** throttle as the cube visualizer. `refresh` gets
    * the live grid so the adapter can snapshot `getOccupiedCells(minConfidence)`;
    * `clear` empties it on store swap. Absent unless the
-   * `occupancy.occlusionMeshEnabled` setting is on (off by default).
+   * `occupancy.persistentOcclusion` setting is on (off by default).
    */
   readonly occluder?: {
     refresh(grid: NoInfer<TGrid>): void;

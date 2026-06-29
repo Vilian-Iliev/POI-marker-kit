@@ -485,7 +485,7 @@ describe('Occupancy-grid cube wiring in live AR', () => {
     expect(options.visualizer).toBe(mockVisualizerInstance);
     expect(options.storeRef).toBeDefined();
     // The persistent occluder is OFF by default: the mock options omit
-    // occupancy.occlusionMeshEnabled, so no occluder sink is wired (it is the
+    // occupancy.persistentOcclusion, so no occluder sink is wired (it is the
     // opt-in, on-device-gated half of the occupancy-mesh feature).
     expect(options.occluder).toBeUndefined();
     // Issue A (2026-06-22 cube cadence/locality plan §2): the cube-refresh

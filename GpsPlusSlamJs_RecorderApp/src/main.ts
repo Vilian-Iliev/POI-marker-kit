@@ -268,7 +268,7 @@ let unsubscribeFrameTiles: (() => void) | null = null;
 // in the live AR scene at ~1 Hz.
 let occupancyGrid: OccupancyGrid | null = null;
 let occupancyCubesVisualizer: OccupancyCubesVisualizer | null = null;
-// Persistent depth-only occluder (off by default — occupancy.occlusionMeshEnabled).
+// Persistent depth-only occluder (off by default — occupancy.persistentOcclusion).
 let occlusionMesh: OcclusionMesh | null = null;
 let unsubscribeOccupancyGrid: (() => void) | null = null;
 
@@ -1316,7 +1316,7 @@ async function handleEnterAR(): Promise<void> {
         // placed behind it. The adapter snapshots the SAME minConfidence floor
         // the cubes/COLMAP use, so the three consumers can't silently diverge.
         const minConfidence = recordingOptions.occupancy.minConfidence;
-        const occluderSink = recordingOptions.occupancy.occlusionMeshEnabled
+        const occluderSink = recordingOptions.occupancy.persistentOcclusion
           ? ((occlusionMesh = new OcclusionMesh(arWorldGroup)),
             {
               refresh: (g: OccupancyGrid) =>

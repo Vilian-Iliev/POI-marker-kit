@@ -34,6 +34,7 @@ import {
   FRAME_TILE_DISPLAY_CONSTRAINTS,
   QR_CONSTRAINTS,
   type RecordingOptions,
+  type OccupancyOptions,
 } from './recording-options';
 
 // Mock localStorage
@@ -429,28 +430,68 @@ describe('recording-options', () => {
     });
 
     /**
-     * Why these matter (2026-06-13-occupancy-mesh-options-plan.md): the
-     * persistent occluder is an extra-cost, on-device-gated feature, so it must
-     * default OFF and round-trip as a boolean — a corrupted stored value must
-     * not silently switch it on.
+     * Why these matter (2026-06-13-occupancy-mesh-options-plan.md +
+     * 2026-06-29-occupancy-mesh-followups.md): the two occluders are extra-cost,
+     * on-device-gated features, so both must default OFF and round-trip as
+     * booleans — a corrupted stored value must not silently switch either on.
      */
-    it('defaults occlusionMeshEnabled to false for an empty object', () => {
-      expect(validateOccupancyOptions({}).occlusionMeshEnabled).toBe(false);
+    it('defaults persistentOcclusion and liveOcclusion to false for an empty object', () => {
+      const out = validateOccupancyOptions({});
+      expect(out.persistentOcclusion).toBe(false);
+      expect(out.liveOcclusion).toBe(false);
     });
 
-    it('preserves a boolean occlusionMeshEnabled', () => {
-      expect(
-        validateOccupancyOptions({ occlusionMeshEnabled: true })
-          .occlusionMeshEnabled
-      ).toBe(true);
+    it('preserves boolean persistentOcclusion / liveOcclusion', () => {
+      const out = validateOccupancyOptions({
+        persistentOcclusion: true,
+        liveOcclusion: true,
+      });
+      expect(out.persistentOcclusion).toBe(true);
+      expect(out.liveOcclusion).toBe(true);
     });
 
-    it('falls back to the default for a non-boolean occlusionMeshEnabled', () => {
-      expect(
-        validateOccupancyOptions({
-          occlusionMeshEnabled: 'yes' as unknown as boolean,
-        }).occlusionMeshEnabled
-      ).toBe(DEFAULT_RECORDING_OPTIONS.occupancy.occlusionMeshEnabled);
+    it('falls back to the default for non-boolean occlusion flags', () => {
+      const out = validateOccupancyOptions({
+        persistentOcclusion: 'yes' as unknown as boolean,
+        liveOcclusion: 1 as unknown as boolean,
+      });
+      expect(out.persistentOcclusion).toBe(
+        DEFAULT_RECORDING_OPTIONS.occupancy.persistentOcclusion
+      );
+      expect(out.liveOcclusion).toBe(
+        DEFAULT_RECORDING_OPTIONS.occupancy.liveOcclusion
+      );
+    });
+
+    /**
+     * Backward-compat migration (2026-06-29): the occlusion options were a
+     * single `occlusionMeshEnabled` boolean. A recording/options object persisted
+     * before the split carries only that legacy field; it must map onto the new
+     * `persistentOcclusion` (the old mesh occluder IS the persistent one) and
+     * must never silently enable the new live occluder.
+     */
+    it('migrates a legacy occlusionMeshEnabled=true to persistentOcclusion (live stays off)', () => {
+      const out = validateOccupancyOptions({
+        occlusionMeshEnabled: true,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.persistentOcclusion).toBe(true);
+      expect(out.liveOcclusion).toBe(false);
+    });
+
+    it('migrates a legacy occlusionMeshEnabled=false to both occluders off', () => {
+      const out = validateOccupancyOptions({
+        occlusionMeshEnabled: false,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.persistentOcclusion).toBe(false);
+      expect(out.liveOcclusion).toBe(false);
+    });
+
+    it('lets a present persistentOcclusion override a conflicting legacy occlusionMeshEnabled', () => {
+      const out = validateOccupancyOptions({
+        occlusionMeshEnabled: true,
+        persistentOcclusion: false,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.persistentOcclusion).toBe(false);
     });
   });
 
@@ -1284,7 +1325,8 @@ describe('recording-options', () => {
         occupancy: {
           cellSizeM: 0.1,
           minConfidence: 3,
-          occlusionMeshEnabled: true,
+          persistentOcclusion: true,
+          liveOcclusion: true,
         },
         frameTileDisplay: { divisor: 4 },
         visualization: { ...DEFAULT_RECORDING_OPTIONS.visualization },

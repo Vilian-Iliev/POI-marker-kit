@@ -332,7 +332,7 @@ describe('wireOccupancyGridSubscribers', () => {
     dispose();
   });
 
-  describe('optional occluder (occupancy.occlusionMeshEnabled)', () => {
+  describe('optional occluder (occupancy.persistentOcclusion)', () => {
     it('refreshes the occluder on the same throttle as the visualizer', () => {
       const grid = makeGridSpy();
       const visualizer = makeVisualizerSpy();
