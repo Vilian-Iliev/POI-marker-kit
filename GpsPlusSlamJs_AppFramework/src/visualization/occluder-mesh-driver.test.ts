@@ -253,6 +253,48 @@ describe('OccluderMeshDriver', () => {
     expect(indices).not.toBeNull();
   });
 
+  it('does not wedge when the worker postMessage throws synchronously (e.g. DataCloneError): reports via onError and falls back to sync', () => {
+    const { poster, posted } = makeFakePoster();
+    const onError = vi.fn();
+    const onWorkerUnusable = vi.fn();
+    const driver = new OccluderMeshDriver(poster, {
+      onError,
+      onWorkerUnusable,
+    });
+    // A real `Worker.postMessage` can throw SYNCHRONOUSLY — a `DataCloneError`
+    // for a non-cloneable payload, or an already-detached/invalid transferable.
+    // The slot is marked in-flight *before* the post, so an unguarded throw
+    // leaves `inFlightId` set forever: the driver would silently freeze (every
+    // later request just overwrites `pending` and never posts). This pins the
+    // worker-path symmetry with the guarded synchronous path below.
+    (poster.postMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => {
+        throw new Error('DataCloneError');
+      }
+    );
+
+    expect(() =>
+      driver.request(box(2), CELL, 'per-face', undefined, () => {})
+    ).not.toThrow();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(driver.busy).toBe(false); // ← was: stayed true forever (wedged)
+    expect(posted).toHaveLength(0); // the throwing post never recorded a request
+
+    // A worker that throws on its very first post has never meshed — treated as
+    // unusable (same as a module load failure): the driver switches to
+    // synchronous meshing so the occluder keeps working instead of freezing.
+    expect(onWorkerUnusable).toHaveBeenCalledTimes(1);
+    let indices: Uint32Array | null = null;
+    driver.request(box(2), CELL, 'per-face', undefined, (_p, i) => {
+      indices = i;
+    });
+    const direct = meshOccupiedCells(box(2), CELL);
+    expect(indices).not.toBeNull();
+    expect(Array.from(indices!)).toEqual(Array.from(direct.indices));
+    expect(posted).toHaveLength(0); // never posted to the dead worker
+    expect(driver.busy).toBe(false);
+  });
+
   it('delivers nothing after dispose()', () => {
     const { poster, respond } = makeFakePoster();
     const driver = new OccluderMeshDriver(poster);

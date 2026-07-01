@@ -151,7 +151,18 @@ export class OccluderMeshDriver {
       job.getCellPoint
     );
     if (this.poster && !this.syncMode) {
-      this.poster.postMessage(request, transfer);
+      // `Worker.postMessage` can throw SYNCHRONOUSLY (a `DataCloneError` for a
+      // non-cloneable payload, or an already-detached/invalid transferable).
+      // The slot was marked in-flight above, so an unguarded throw would leave
+      // `inFlightId` set forever and wedge the driver (every later request just
+      // overwrites `pending` and never posts). Mirror the synchronous path:
+      // clear the slot via `failInFlight` — a post that throws before the
+      // worker ever meshed is treated as an unusable worker (→ sync fallback).
+      try {
+        this.poster.postMessage(request, transfer);
+      } catch (error) {
+        this.failInFlight(id, error);
+      }
     } else {
       // Synchronous meshing (no worker, or the worker was declared unusable).
       // A throw here (e.g. an invalid cellSizeM) must not wedge the slot: clear
