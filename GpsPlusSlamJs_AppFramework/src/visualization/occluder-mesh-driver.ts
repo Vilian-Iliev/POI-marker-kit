@@ -14,6 +14,15 @@
  *   never queues up behind a growing grid.
  * - **Synchronous fallback** — constructed with `poster = null` (no worker
  *   support), it meshes inline and calls back immediately (today's behaviour).
+ * - **Error recovery (2026-07-01 Phase 1 gap fix)** — a worker that never replies
+ *   (an uncaught throw in `runMeshRequest`, or a module that fails to load) must
+ *   not wedge the in-flight slot forever. On a worker error the driver clears the
+ *   slot and re-posts the pending snapshot (or lets the next refresh post) so the
+ *   occluder never silently freezes. If the worker errors **before ever producing
+ *   a mesh** — almost always a load failure — the driver declares it unusable
+ *   ({@link OccluderMeshDriverOptions.onWorkerUnusable}) and switches to
+ *   synchronous main-thread meshing, since further posts would vanish into a dead
+ *   worker.
  *
  * Framework-owned + THREE-free: a consumer supplies a {@link MeshWorkerPoster}
  * adapting a real `Worker`, and applies the result (e.g. `OcclusionMesh.applyMeshData`).
@@ -34,11 +43,32 @@ export type OnMesh = (positions: Float32Array, indices: Uint32Array) => void;
 
 /**
  * The minimal `Worker`-like surface the driver needs. A consumer adapts a real
- * `Worker`: `{ postMessage: (m, t) => worker.postMessage(m, t), onmessage: … }`.
+ * `Worker`: forwards `worker.onmessage` → `poster.onmessage` and
+ * `worker.onerror` / `worker.onmessageerror` → `poster.onerror` (so the driver
+ * can recover from a worker that never replies).
  */
 export interface MeshWorkerPoster {
   postMessage(message: MeshWorkerRequest, transfer: ArrayBufferLike[]): void;
   onmessage: ((event: { data: MeshWorkerResponse }) => void) | null;
+  /** Fired when the worker errors (uncaught throw or module load failure). */
+  onerror: ((error?: unknown) => void) | null;
+}
+
+/** Optional driver callbacks (logging + worker-teardown seams). */
+export interface OccluderMeshDriverOptions {
+  /**
+   * Called once when the driver gives up on the worker and switches to
+   * synchronous meshing (the worker errored before ever producing a mesh —
+   * almost always a module that failed to load). The consumer should terminate
+   * the now-dead worker.
+   */
+  onWorkerUnusable?: () => void;
+  /**
+   * Called with any error that aborts a job — a worker error event, or a throw
+   * from synchronous meshing — so the consumer can log it. Optional; if absent
+   * the error is swallowed (the frame is dropped, the driver stays healthy).
+   */
+  onError?: (error: unknown) => void;
 }
 
 interface Job {
@@ -51,17 +81,34 @@ interface Job {
 
 export class OccluderMeshDriver {
   private readonly poster: MeshWorkerPoster | null;
+  private readonly onWorkerUnusable?: () => void;
+  private readonly onError?: (error: unknown) => void;
   private nextId = 1;
   private inFlightId: number | null = null;
   private inFlightCallback: OnMesh | null = null;
   private pending: Job | null = null;
   private disposed = false;
+  /** True ⇒ mesh inline (no worker, or the worker was declared unusable). */
+  private syncMode: boolean;
+  /** Set once the worker returns a mesh — distinguishes a transient error from a load failure. */
+  private hasSucceeded = false;
 
-  /** @param poster a worker adapter, or `null` for synchronous main-thread meshing. */
-  constructor(poster: MeshWorkerPoster | null) {
+  /**
+   * @param poster a worker adapter, or `null` for synchronous main-thread meshing.
+   * @param options optional {@link OccluderMeshDriverOptions.onWorkerUnusable} /
+   *   {@link OccluderMeshDriverOptions.onError} callbacks.
+   */
+  constructor(
+    poster: MeshWorkerPoster | null,
+    options: OccluderMeshDriverOptions = {}
+  ) {
     this.poster = poster;
+    this.syncMode = poster === null;
+    this.onWorkerUnusable = options.onWorkerUnusable;
+    this.onError = options.onError;
     if (poster) {
       poster.onmessage = (event) => this.handleResponse(event.data);
+      poster.onerror = (error) => this.handleWorkerError(error);
     }
   }
 
@@ -103,12 +150,19 @@ export class OccluderMeshDriver {
       job.mode,
       job.getCellPoint
     );
-    if (this.poster) {
+    if (this.poster && !this.syncMode) {
       this.poster.postMessage(request, transfer);
     } else {
-      // Synchronous fallback: mesh inline and deliver immediately.
-      const { response } = runMeshRequest(request);
-      this.handleResponse(response);
+      // Synchronous meshing (no worker, or the worker was declared unusable).
+      // A throw here (e.g. an invalid cellSizeM) must not wedge the slot: clear
+      // it, report, and drop the frame — the next refresh re-meshes a fresh
+      // snapshot.
+      try {
+        const { response } = runMeshRequest(request);
+        this.handleResponse(response);
+      } catch (error) {
+        this.failInFlight(id, error);
+      }
     }
   }
 
@@ -116,6 +170,7 @@ export class OccluderMeshDriver {
     if (this.disposed || response.id !== this.inFlightId) {
       return; // stale (e.g. a response after dispose)
     }
+    this.hasSucceeded = true;
     const callback = this.inFlightCallback;
     this.inFlightId = null;
     this.inFlightCallback = null;
@@ -128,7 +183,45 @@ export class OccluderMeshDriver {
     }
   }
 
-  /** Stop delivering results (detaches the worker handler; drops any pending). */
+  /** A worker error event — recover the in-flight job (only one is ever in flight). */
+  private handleWorkerError(error?: unknown): void {
+    if (this.disposed || this.inFlightId === null) {
+      return; // no job to fail (stray error / already recovered)
+    }
+    this.failInFlight(this.inFlightId, error);
+  }
+
+  /**
+   * Clear a failed in-flight job so the driver never wedges. If the worker had
+   * never produced a mesh (almost always a module load failure) fall back to
+   * synchronous meshing; then re-post the pending snapshot if one is queued. We
+   * deliberately do NOT re-post the *failed* job: if it failed on deterministic
+   * bad data, re-posting would loop — the next refresh brings a fresh snapshot.
+   */
+  private failInFlight(id: number, error?: unknown): void {
+    if (this.disposed || id !== this.inFlightId) {
+      return; // stale
+    }
+    this.inFlightId = null;
+    this.inFlightCallback = null;
+    if (error !== undefined) {
+      this.onError?.(error);
+    }
+    if (!this.syncMode && !this.hasSucceeded) {
+      // The worker errored before ever meshing — treat it as unusable (we will
+      // not get a second error to act on, and further posts would vanish into a
+      // dead worker). Switch to synchronous main-thread meshing.
+      this.syncMode = true;
+      this.onWorkerUnusable?.();
+    }
+    if (this.pending) {
+      const next = this.pending;
+      this.pending = null;
+      this.post(next);
+    }
+  }
+
+  /** Stop delivering results (detaches the worker handlers; drops any pending). */
   dispose(): void {
     this.disposed = true;
     this.pending = null;
@@ -136,6 +229,7 @@ export class OccluderMeshDriver {
     this.inFlightId = null;
     if (this.poster) {
       this.poster.onmessage = null;
+      this.poster.onerror = null;
     }
   }
 }

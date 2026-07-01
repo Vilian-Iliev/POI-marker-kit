@@ -38,7 +38,18 @@ export function createOccluderMeshWorker(
   createWorker: () => Worker = defaultCreateWorker
 ): { driver: OccluderMeshDriver; dispose: () => void } {
   const { worker, poster } = tryCreateWorker(createWorker);
-  const driver = new OccluderMeshDriver(poster);
+  const driver = new OccluderMeshDriver(poster, {
+    // A worker error means the in-flight job never replies; the driver clears
+    // the wedge and retries the next snapshot, so the occluder stays a beat
+    // staler at worst instead of freezing.
+    onError: (err) => log.warn('Occluder mesh worker job failed', err),
+    // The worker errored before ever meshing (a module load failure): the driver
+    // has switched to synchronous meshing — terminate the dead worker.
+    onWorkerUnusable: () => {
+      log.warn('Occluder mesh worker unusable; meshing synchronously');
+      worker?.terminate();
+    },
+  });
   return {
     driver,
     dispose: () => {
@@ -59,14 +70,20 @@ function tryCreateWorker(createWorker: () => Worker): {
       postMessage: (message, transfer) =>
         worker.postMessage(message, transfer as Transferable[]),
       onmessage: null,
+      onerror: null,
     };
     worker.onmessage = (event: MessageEvent): void => {
       poster.onmessage?.({ data: event.data as MeshWorkerResponse });
     };
-    worker.onerror = (event): void => {
-      // A worker error means no response for the in-flight job; log and let the
-      // next refresh retry. (The occluder just stays a beat staler.)
-      log.warn('Occluder mesh worker error', event.message ?? event);
+    // Forward worker errors to the driver so it can recover the in-flight job
+    // (clear the wedge, retry the latest snapshot, or fall back to synchronous
+    // meshing on a load failure) instead of freezing. Logging happens in the
+    // driver's onError.
+    worker.onerror = (event: ErrorEvent): void => {
+      poster.onerror?.(event.message ?? event);
+    };
+    worker.onmessageerror = (event): void => {
+      poster.onerror?.(event);
     };
     return { worker, poster };
   } catch (err) {

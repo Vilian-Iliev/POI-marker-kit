@@ -1,11 +1,15 @@
 /**
- * OccluderMeshDriver — coalescing + synchronous-fallback tests.
+ * OccluderMeshDriver — coalescing + synchronous-fallback + error-recovery tests.
  *
  * The driver is the main-thread half of the Web Worker occluder offload. These
- * pin the two policies that make it safe under a growing grid: at most one job
- * in flight with the NEWEST request winning (intermediates dropped), and a
- * synchronous fallback when no worker is available. A fake poster stands in for
- * a real Worker so the seam is unit-tested without a worker environment.
+ * pin the policies that make it safe under a growing grid: at most one job in
+ * flight with the NEWEST request winning (intermediates dropped), a synchronous
+ * fallback when no worker is available, and — critically — **recovery from a
+ * worker that never replies** (an uncaught throw in the worker, or a module that
+ * fails to load). Without recovery the in-flight slot would stay set forever and
+ * the occluder would silently freeze for the rest of the session (the 2026-07-01
+ * "Phase 1 gap"). A fake poster stands in for a real Worker so the seam is
+ * unit-tested without a worker environment.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -28,7 +32,10 @@ function box(n: number): GridCell[] {
   return cells;
 }
 
-/** A fake worker: records posted requests; `respond(i)` runs one and fires onmessage. */
+/**
+ * A fake worker: records posted requests. `respond(i)` meshes one and fires
+ * `onmessage`; `error()` fires `onerror` (a worker that threw / failed to load).
+ */
 function makeFakePoster() {
   const posted: MeshWorkerRequest[] = [];
   const poster: MeshWorkerPoster = {
@@ -36,12 +43,16 @@ function makeFakePoster() {
       posted.push(message);
     }),
     onmessage: null,
+    onerror: null,
   };
   const respond = (i: number): void => {
     const { response } = runMeshRequest(posted[i]!);
     poster.onmessage?.({ data: response });
   };
-  return { poster, posted, respond };
+  const error = (): void => {
+    poster.onerror?.(new Error('worker boom'));
+  };
+  return { poster, posted, respond, error };
 }
 
 describe('OccluderMeshDriver', () => {
@@ -95,6 +106,98 @@ describe('OccluderMeshDriver', () => {
     respond(1); // C completes; B was dropped
     expect(done).toEqual(['A', 'C']);
     expect(posted).toHaveLength(2);
+  });
+
+  it('recovers from a worker error (after a prior success): clears the wedge and re-posts the pending snapshot', () => {
+    const { poster, posted, respond, error } = makeFakePoster();
+    const onWorkerUnusable = vi.fn();
+    const driver = new OccluderMeshDriver(poster, { onWorkerUnusable });
+    const done: string[] = [];
+
+    // Prove the worker works once, so a later error is transient (not a load failure).
+    driver.request(box(2), CELL, 'per-face', undefined, () => done.push('A'));
+    respond(0);
+    expect(done).toEqual(['A']);
+
+    // B goes in flight; C coalesces behind it as the pending (newest) job.
+    driver.request(box(3), CELL, 'per-face', undefined, () => done.push('B'));
+    driver.request(box(4), CELL, 'per-face', undefined, () => done.push('C'));
+    expect(driver.busy).toBe(true);
+
+    error(); // B's worker job fails and never replies
+    // The driver must NOT wedge: it drops B, keeps the worker (already proven
+    // good), and re-posts the pending C.
+    expect(onWorkerUnusable).not.toHaveBeenCalled();
+    expect(driver.busy).toBe(true); // C now in flight
+    expect(posted).toHaveLength(3); // A, B, C  (C re-posted after the error)
+
+    respond(2); // C completes; B was dropped (it failed)
+    expect(done).toEqual(['A', 'C']);
+    expect(driver.busy).toBe(false);
+  });
+
+  it('does not freeze after a worker error with nothing queued: the next request posts again', () => {
+    const { poster, posted, respond, error } = makeFakePoster();
+    const driver = new OccluderMeshDriver(poster);
+    driver.request(box(2), CELL, 'per-face', undefined, () => {});
+    respond(0); // prove the worker works → the next error is transient
+    driver.request(box(3), CELL, 'per-face', undefined, () => {});
+    expect(driver.busy).toBe(true);
+
+    error(); // fails with nothing queued
+    expect(driver.busy).toBe(false); // ← the bug was: `busy` stayed true forever
+
+    // The next refresh must post again (the bug made every later request a
+    // silently-dropped `pending` overwrite).
+    const done: string[] = [];
+    driver.request(box(2), CELL, 'per-face', undefined, () =>
+      done.push('next')
+    );
+    expect(posted).toHaveLength(3);
+    respond(2);
+    expect(done).toEqual(['next']);
+  });
+
+  it('falls back to synchronous meshing when the worker errors before ever meshing (module load failure)', () => {
+    const { poster, error } = makeFakePoster();
+    const onWorkerUnusable = vi.fn();
+    const driver = new OccluderMeshDriver(poster, { onWorkerUnusable });
+    const cells = box(3);
+
+    // The very first job is in flight when the worker's module fails to load →
+    // onerror fires before any successful mesh.
+    driver.request(cells, CELL, 'per-face', undefined, () => {});
+    error();
+    expect(onWorkerUnusable).toHaveBeenCalledTimes(1); // driver gives up on the worker
+
+    // Subsequent requests now mesh synchronously on the main thread — the
+    // occluder keeps working instead of freezing.
+    let indices: Uint32Array | null = null;
+    driver.request(cells, CELL, 'per-face', undefined, (_p, i) => {
+      indices = i;
+    });
+    const direct = meshOccupiedCells(cells, CELL);
+    expect(indices).not.toBeNull();
+    expect(Array.from(indices!)).toEqual(Array.from(direct.indices));
+    expect(driver.busy).toBe(false); // sync completes immediately
+  });
+
+  it('does not wedge when synchronous meshing throws (bad cellSize): reports via onError and recovers', () => {
+    const onError = vi.fn();
+    const driver = new OccluderMeshDriver(null, { onError });
+    // cellSizeM <= 0 makes meshOccupiedCells throw inside runMeshRequest.
+    expect(() =>
+      driver.request(box(2), 0, 'per-face', undefined, () => {})
+    ).not.toThrow();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(driver.busy).toBe(false); // slot cleared, not wedged
+
+    // A subsequent valid request still meshes.
+    let indices: Uint32Array | null = null;
+    driver.request(box(2), CELL, 'per-face', undefined, (_p, i) => {
+      indices = i;
+    });
+    expect(indices).not.toBeNull();
   });
 
   it('delivers nothing after dispose()', () => {

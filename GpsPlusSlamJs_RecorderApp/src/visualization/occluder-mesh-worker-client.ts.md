@@ -10,10 +10,10 @@ App-side glue that builds the framework `OccluderMeshDriver` backed by the real 
 
 ## Invariants & assumptions
 
-- **Graceful degradation:** if `createWorker()` throws (no worker support / test env), `poster = null` ⇒ the driver meshes synchronously — the occluder still works, just on-thread.
+- **Graceful degradation (construction):** if `createWorker()` throws (no worker support / test env), `poster = null` ⇒ the driver meshes synchronously — the occluder still works, just on-thread.
+- **Graceful degradation (async load failure):** `worker.onerror` **and** `worker.onmessageerror` are forwarded to `poster.onerror` so the driver can recover. On the driver's `onWorkerUnusable` (a worker that errored before ever meshing — almost always a module load failure) this client **terminates** the dead worker; the driver has already switched to synchronous meshing. A worker error is logged via the driver's `onError`. Net: a broken worker degrades to on-thread meshing instead of freezing the occluder.
 - **Wiring:** the recorder (`main.ts` live, `replay-mode.ts` replay) creates one per active occluder and, in the occupancy-grid `refresh`, calls `driver.request(grid.getOccupiedCells(minConf), cellSize, mode, grid.getCellPoint, (pos, idx) => occlusionMesh.applyMeshData(pos, idx))`. `getOccupiedCells` + `getCellPoint` stay main-thread (the grid lives there); only `meshOccupiedCells` runs off-thread. Disposed with the occluder.
-- A worker `onerror` is logged (the in-flight job just gets no result; the next refresh retries).
 
 ## Tests
 
-- `occluder-mesh-worker-client.test.ts` — a throwing factory → synchronous meshing matches a direct mesh; a fake worker → post → respond → callback, and `terminate()` on dispose.
+- `occluder-mesh-worker-client.test.ts` — a throwing factory → synchronous meshing matches a direct mesh; a fake worker → post → respond → callback, and `terminate()` on dispose; a pre-mesh `worker.onerror` → worker terminated and the next request meshes synchronously.
