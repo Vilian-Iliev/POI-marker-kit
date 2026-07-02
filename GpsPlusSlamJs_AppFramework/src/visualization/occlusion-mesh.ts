@@ -34,9 +34,11 @@ import {
 } from '../ar/occupancy-mesher.js';
 import { WEBXR_TO_NUE } from '../ar/webxr-nue-basis.js';
 import type { Vector3 } from 'gps-plus-slam-js';
+import type { OccluderDebugStyle } from '../state/recording-options.js';
 
 const MESH_NAME = 'occupancy-occluder';
 const DEBUG_MESH_NAME = 'occupancy-occluder-debug';
+const DEBUG_WIREFRAME_MESH_NAME = 'occupancy-occluder-debug-wireframe';
 
 /** Default render order — well before virtual content (which is ≥ 0). */
 const DEFAULT_RENDER_ORDER = -1;
@@ -44,6 +46,21 @@ const DEFAULT_RENDER_ORDER = -1;
 /** Opacity of the matcap debug skin — see-through enough to read the real scene
  *  behind it while the shape stays legible. */
 const DEBUG_SKIN_OPACITY = 0.6;
+
+/** Light-cyan GL lines of the wireframe skin — faint enough not to swamp the
+ *  shaded skin in the combined style, visible enough to read triangle density. */
+const WIREFRAME_COLOR = 0xaaeeff;
+const WIREFRAME_OPACITY = 0.35;
+
+/** Which styles shade with the matcap (and therefore need vertex normals —
+ *  pure 'wireframe' is unlit and keeps the remesh path normal-free). */
+function styleNeedsNormals(style: OccluderDebugStyle): boolean {
+  return (
+    style === 'matcap' ||
+    style === 'depth-shaded' ||
+    style === 'depth-shaded-wireframe'
+  );
+}
 
 /**
  * Build a tiny procedural matcap texture (a shaded sphere with a specular
@@ -127,13 +144,20 @@ export class OcclusionMesh {
   private geometry: THREE.BufferGeometry;
   private lastAabbs: readonly Aabb[] = [];
   private disposed = false;
-  // Debug visualization (off by default): a VISIBLE matcap "skin" sharing the
-  // occluder's geometry. Kept separate from `this.mesh` (the invisible depth
-  // writer) so toggling debug never changes the actual occlusion — the depth
-  // mesh is untouched, the skin is purely additive.
-  private debugViz = false;
-  private debugSkin: THREE.Mesh | null = null;
-  private debugMaterial: THREE.MeshMatcapMaterial | null = null;
+  // Debug visualization (off by default): VISIBLE "skins" sharing the
+  // occluder's geometry, composed per style (shaded matcap-based skin and/or a
+  // wireframe skin). Kept separate from `this.mesh` (the invisible depth
+  // writer) so styling never changes the actual occlusion — the depth mesh is
+  // untouched, the skins are purely additive. Materials (and the shared matcap
+  // texture) are lazily created once and cached across style switches; they are
+  // released only in dispose().
+  private debugStyle: OccluderDebugStyle = 'off';
+  private shadedSkin: THREE.Mesh | null = null;
+  private wireframeSkin: THREE.Mesh | null = null;
+  private matcapTexture: THREE.DataTexture | null = null;
+  private matcapMaterial: THREE.MeshMatcapMaterial | null = null;
+  private depthShadedMaterial: THREE.MeshMatcapMaterial | null = null;
+  private wireframeMaterial: THREE.MeshBasicMaterial | null = null;
 
   /**
    * @param arSpaceNode the AR-odometry-NUE node that receives the alignment
@@ -226,56 +250,171 @@ export class OcclusionMesh {
     next.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     next.setIndex(new THREE.BufferAttribute(indices, 1));
     // Matcap shading needs per-vertex normals; the mesher emits none. Compute
-    // them only when the debug skin is showing, so the default occluder path
-    // (invisible — normals unused) stays cheap.
-    if (this.debugViz) next.computeVertexNormals();
+    // them only when a matcap-based debug skin is showing, so the default
+    // occluder path (invisible — normals unused) and the pure wireframe style
+    // stay cheap.
+    if (styleNeedsNormals(this.debugStyle)) next.computeVertexNormals();
     this.geometry.dispose();
     this.geometry = next;
     this.mesh.geometry = next;
-    if (this.debugSkin) this.debugSkin.geometry = next;
+    this.rebindSkinGeometry(next);
+  }
+
+  /** Point every active debug skin at the (new) shared geometry. */
+  private rebindSkinGeometry(geometry: THREE.BufferGeometry): void {
+    if (this.shadedSkin) this.shadedSkin.geometry = geometry;
+    if (this.wireframeSkin) this.wireframeSkin.geometry = geometry;
   }
 
   /**
-   * Toggle a **visible** matcap debug rendering of the occluder mesh (shiny,
-   * semi-transparent) so the meshed surface's shape can be judged on-device.
+   * Select which **visible debug skin(s)** render the occluder mesh so its
+   * shape and structure can be judged on-device (2026-07-02 debug-viz-styles
+   * plan): the original `'matcap'` skin, a `'depth-shaded'` variant (distance
+   * fade + fresnel rim, separates overlapping layers), a `'wireframe'` overlay
+   * (the raw triangulation as GL lines), the combined
+   * `'depth-shaded-wireframe'`, or `'off'`.
    *
-   * Additive by design: this adds/removes a separate skin mesh sharing the
-   * occluder's geometry and **never touches the invisible depth-only mesh**, so
-   * occlusion is byte-for-byte unchanged whether debug is on or off. The skin is
-   * `transparent` with `depthWrite:false` (the depth-only mesh already wrote the
-   * occluding depth), so it just paints the shiny surface where the occluder is
-   * the nearest geometry.
+   * Additive by design: every style adds/removes separate skin meshes sharing
+   * the occluder's geometry and **never touches the invisible depth-only
+   * mesh**, so occlusion is byte-for-byte unchanged whichever style is active.
+   * The skins are `transparent` with `depthWrite:false` (the depth-only mesh
+   * already wrote the occluding depth), so they just paint where the occluder
+   * is the nearest geometry; the wireframe draws at renderOrder 1 so its lines
+   * overlay the shaded surface in the combined style.
+   *
+   * Vertex normals (the mesher emits none) are computed only for the
+   * matcap-based styles — `'wireframe'` is unlit, so like `'off'` it keeps the
+   * remesh path normal-free.
    *
    * Only meaningful when this occluder is actually meshing the grid (it is the
-   * persistent occluder's mesh); enabling it on an empty/disabled occluder is a
-   * harmless no-op until {@link update} feeds geometry.
+   * persistent occluder's mesh); setting a style on an empty/disabled occluder
+   * is a harmless no-op until {@link update} feeds geometry.
    */
-  setDebugVisualization(enabled: boolean): void {
-    if (this.disposed || enabled === this.debugViz) return;
-    this.debugViz = enabled;
-    if (enabled) {
-      if (!this.debugMaterial) {
-        this.debugMaterial = new THREE.MeshMatcapMaterial({
-          matcap: createOccluderDebugMatcap(),
-          transparent: true,
-          opacity: DEBUG_SKIN_OPACITY,
-          depthWrite: false, // the invisible depth mesh owns the occluding depth
-        });
-      }
+  setDebugStyle(style: OccluderDebugStyle): void {
+    if (this.disposed || style === this.debugStyle) return;
+    this.debugStyle = style;
+    this.applyShadedSkin(this.shadedMaterialFor(style));
+    this.applyWireframeSkin(
+      style === 'wireframe' || style === 'depth-shaded-wireframe'
+    );
+  }
+
+  /** Which matcap-based material the style shades with (null = no shaded skin). */
+  private shadedMaterialFor(
+    style: OccluderDebugStyle
+  ): THREE.MeshMatcapMaterial | null {
+    if (style === 'matcap') return this.getMatcapMaterial();
+    if (style === 'depth-shaded' || style === 'depth-shaded-wireframe') {
+      return this.getDepthShadedMaterial();
+    }
+    return null;
+  }
+
+  /** Add/retarget/remove the single shaded skin node for the desired material. */
+  private applyShadedSkin(material: THREE.MeshMatcapMaterial | null): void {
+    if (material) {
       // Normals for the (possibly already-meshed) current geometry.
       this.geometry.computeVertexNormals();
-      const skin = new THREE.Mesh(this.geometry, this.debugMaterial);
-      skin.name = DEBUG_MESH_NAME;
-      skin.renderOrder = 0; // transparent overlay, after the depth pass
-      skin.frustumCulled = false;
-      skin.matrixAutoUpdate = false;
-      skin.matrix.copy(WEBXR_TO_NUE); // same raw-WebXR → NUE basis as the occluder
-      this.debugSkin = skin;
-      this.arSpaceNode.add(skin);
-    } else if (this.debugSkin) {
-      this.arSpaceNode.remove(this.debugSkin);
-      this.debugSkin = null;
+      if (this.shadedSkin) {
+        this.shadedSkin.material = material;
+      } else {
+        this.shadedSkin = this.createSkinMesh(DEBUG_MESH_NAME, 0, material);
+        this.arSpaceNode.add(this.shadedSkin);
+      }
+    } else if (this.shadedSkin) {
+      this.arSpaceNode.remove(this.shadedSkin);
+      this.shadedSkin = null;
     }
+  }
+
+  /** Add/remove the wireframe skin — drawn after the shaded skin (renderOrder
+   *  1) so its lines sit on top of the surface in the combined style. */
+  private applyWireframeSkin(want: boolean): void {
+    if (want) {
+      if (!this.wireframeSkin) {
+        this.wireframeSkin = this.createSkinMesh(
+          DEBUG_WIREFRAME_MESH_NAME,
+          1,
+          this.getWireframeMaterial()
+        );
+        this.arSpaceNode.add(this.wireframeSkin);
+      }
+    } else if (this.wireframeSkin) {
+      this.arSpaceNode.remove(this.wireframeSkin);
+      this.wireframeSkin = null;
+    }
+  }
+
+  /**
+   * Toggle the matcap debug rendering of the occluder mesh.
+   *
+   * @deprecated Superseded by {@link setDebugStyle} (2026-07-02) — this is a
+   * thin wrapper mapping `enabled ? 'matcap' : 'off'`, kept so existing
+   * consumers of the boolean API keep working unchanged.
+   */
+  setDebugVisualization(enabled: boolean): void {
+    this.setDebugStyle(enabled ? 'matcap' : 'off');
+  }
+
+  /** A debug skin mesh sharing the occluder's geometry, transform and culling
+   *  behaviour — only name, renderOrder and material differ per skin. */
+  private createSkinMesh(
+    name: string,
+    renderOrder: number,
+    material: THREE.Material
+  ): THREE.Mesh {
+    const skin = new THREE.Mesh(this.geometry, material);
+    skin.name = name;
+    skin.renderOrder = renderOrder; // transparent overlay, after the depth pass
+    skin.frustumCulled = false;
+    skin.matrixAutoUpdate = false;
+    skin.matrix.copy(WEBXR_TO_NUE); // same raw-WebXR → NUE basis as the occluder
+    return skin;
+  }
+
+  /** The procedural matcap texture, shared by both matcap-based materials. */
+  private getMatcapTexture(): THREE.DataTexture {
+    if (!this.matcapTexture) {
+      this.matcapTexture = createOccluderDebugMatcap();
+    }
+    return this.matcapTexture;
+  }
+
+  private getMatcapMaterial(): THREE.MeshMatcapMaterial {
+    if (!this.matcapMaterial) {
+      this.matcapMaterial = new THREE.MeshMatcapMaterial({
+        matcap: this.getMatcapTexture(),
+        transparent: true,
+        opacity: DEBUG_SKIN_OPACITY,
+        depthWrite: false, // the invisible depth mesh owns the occluding depth
+      });
+    }
+    return this.matcapMaterial;
+  }
+
+  private getDepthShadedMaterial(): THREE.MeshMatcapMaterial {
+    if (!this.depthShadedMaterial) {
+      this.depthShadedMaterial = new THREE.MeshMatcapMaterial({
+        matcap: this.getMatcapTexture(),
+        transparent: true,
+        opacity: DEBUG_SKIN_OPACITY,
+        depthWrite: false,
+      });
+    }
+    return this.depthShadedMaterial;
+  }
+
+  private getWireframeMaterial(): THREE.MeshBasicMaterial {
+    if (!this.wireframeMaterial) {
+      this.wireframeMaterial = new THREE.MeshBasicMaterial({
+        wireframe: true, // GL 1-px lines over the shared triangulation
+        color: WIREFRAME_COLOR,
+        transparent: true,
+        opacity: WIREFRAME_OPACITY,
+        depthWrite: false,
+      });
+    }
+    return this.wireframeMaterial;
   }
 
   /** Empty the mesh (e.g. on store swap); the node stays in the scene. */
@@ -285,10 +424,10 @@ export class OcclusionMesh {
     this.geometry.dispose();
     this.geometry = next;
     this.mesh.geometry = next;
-    // Keep the visible debug skin in sync with the depth-only mesh (as
-    // swapGeometry does) — otherwise it keeps rendering the old, now-disposed
+    // Keep the visible debug skins in sync with the depth-only mesh (as
+    // swapGeometry does) — otherwise they keep rendering the old, now-disposed
     // geometry and a stale debug surface lingers on screen after a clear.
-    if (this.debugSkin) this.debugSkin.geometry = next;
+    this.rebindSkinGeometry(next);
     this.lastAabbs = [];
   }
 
@@ -297,13 +436,22 @@ export class OcclusionMesh {
     if (this.disposed) return;
     this.disposed = true;
     this.arSpaceNode.remove(this.mesh);
-    if (this.debugSkin) {
-      this.arSpaceNode.remove(this.debugSkin);
-      this.debugSkin = null;
+    if (this.shadedSkin) {
+      this.arSpaceNode.remove(this.shadedSkin);
+      this.shadedSkin = null;
     }
-    this.debugMaterial?.matcap?.dispose();
-    this.debugMaterial?.dispose();
-    this.debugMaterial = null;
+    if (this.wireframeSkin) {
+      this.arSpaceNode.remove(this.wireframeSkin);
+      this.wireframeSkin = null;
+    }
+    this.matcapTexture?.dispose();
+    this.matcapTexture = null;
+    this.matcapMaterial?.dispose();
+    this.matcapMaterial = null;
+    this.depthShadedMaterial?.dispose();
+    this.depthShadedMaterial = null;
+    this.wireframeMaterial?.dispose();
+    this.wireframeMaterial = null;
     this.geometry.dispose();
     this.material.dispose();
     this.lastAabbs = [];

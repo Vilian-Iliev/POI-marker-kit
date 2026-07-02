@@ -43,6 +43,37 @@ function debugSkin(parent: THREE.Object3D): THREE.Mesh | undefined {
   );
 }
 
+/** The shaded (matcap-based) debug skin, located by its stable node name. */
+function shadedSkin(parent: THREE.Object3D): THREE.Mesh | undefined {
+  return meshes(parent).find((m) => m.name === 'occupancy-occluder-debug');
+}
+
+/** The wireframe debug skin, located by its stable node name. */
+function wireframeSkin(parent: THREE.Object3D): THREE.Mesh | undefined {
+  return meshes(parent).find(
+    (m) => m.name === 'occupancy-occluder-debug-wireframe'
+  );
+}
+
+/**
+ * Assert the invisible depth-only occluder is untouched — the occlusion
+ * invariant every debug style must preserve: same mesh, same material flags,
+ * same renderOrder, and the SAME geometry object (the skins share it, they
+ * never replace it).
+ */
+function expectOccluderUntouched(
+  parent: THREE.Object3D,
+  geometryBefore: THREE.BufferGeometry
+): void {
+  const depthMesh = occluderMesh(parent);
+  expect(depthMesh).toBeDefined();
+  const material = depthMesh!.material as THREE.Material;
+  expect(material.colorWrite).toBe(false);
+  expect(material.depthWrite).toBe(true);
+  expect(depthMesh!.renderOrder).toBeLessThan(0);
+  expect(depthMesh!.geometry).toBe(geometryBefore);
+}
+
 describe('OcclusionMesh', () => {
   it('attaches a depth-only mesh under the injected node with the NUE basis', () => {
     const parent = new THREE.Group();
@@ -172,12 +203,192 @@ describe('OcclusionMesh', () => {
   });
 
   /**
+   * Debug styles (2026-07-02 debug-viz-styles plan): `setDebugStyle` composes a
+   * small set of additive skins per style — matcap, depth-shaded (matcap-based
+   * material with distance fade + fresnel rim), and a triangle wireframe. Every
+   * style must preserve the occlusion invariant: the invisible depth-only mesh
+   * (colorWrite:false / depthWrite:true / renderOrder −1) is never modified, so
+   * occlusion is identical no matter which debug skin is showing. Normals are
+   * only computed for the matcap-based styles — a pure wireframe (like 'off')
+   * keeps the remesh path cheap.
+   */
+  describe('setDebugStyle', () => {
+    it("'matcap' adds only the shaded matcap skin; depth mesh untouched", () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.update([[0, 0, 0]], 0.15);
+      const geometryBefore = occluderMesh(parent)!.geometry;
+
+      occluder.setDebugStyle('matcap');
+
+      const skin = shadedSkin(parent);
+      expect(skin).toBeDefined();
+      expect(wireframeSkin(parent)).toBeUndefined();
+      const mat = skin!.material as THREE.MeshMatcapMaterial;
+      expect(mat).toBeInstanceOf(THREE.MeshMatcapMaterial);
+      expect(mat.transparent).toBe(true);
+      expect(mat.opacity).toBeLessThan(1);
+      expect(mat.depthWrite).toBe(false);
+      expect(skin!.geometry).toBe(geometryBefore); // shared, not copied
+      expect(skin!.geometry.getAttribute('normal')).toBeTruthy();
+      expectOccluderUntouched(parent, geometryBefore);
+      occluder.dispose();
+    });
+
+    it("'wireframe' adds only the line skin and computes no normals", () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.setDebugStyle('wireframe'); // set BEFORE meshing
+      occluder.update([[0, 0, 0]], 0.15);
+      const geometryBefore = occluderMesh(parent)!.geometry;
+
+      const wire = wireframeSkin(parent);
+      expect(wire).toBeDefined();
+      expect(shadedSkin(parent)).toBeUndefined();
+      const mat = wire!.material as THREE.MeshBasicMaterial;
+      expect(mat).toBeInstanceOf(THREE.MeshBasicMaterial);
+      expect(mat.wireframe).toBe(true);
+      expect(mat.transparent).toBe(true);
+      expect(mat.opacity).toBeLessThan(1);
+      expect(mat.depthWrite).toBe(false);
+      // Drawn AFTER the shaded skin (renderOrder 0) so lines overlay the surface.
+      expect(wire!.renderOrder).toBe(1);
+      // Same raw-WebXR → NUE basis as the occluder so it overlays exactly.
+      expect(wire!.matrixAutoUpdate).toBe(false);
+      expect(wire!.matrix.elements).toEqual(WEBXR_TO_NUE.elements);
+      expect(wire!.geometry).toBe(geometryBefore); // shared, not copied
+      // Wireframe needs no lighting — the remesh path must stay normal-free.
+      expect(wire!.geometry.getAttribute('normal')).toBeUndefined();
+      expectOccluderUntouched(parent, geometryBefore);
+      occluder.dispose();
+    });
+
+    it("'depth-shaded' uses a distinct matcap-based material (not the plain matcap)", () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.update([[0, 0, 0]], 0.15);
+
+      occluder.setDebugStyle('matcap');
+      const matcapMaterial = shadedSkin(parent)!.material;
+      occluder.setDebugStyle('depth-shaded');
+
+      const skin = shadedSkin(parent);
+      expect(skin).toBeDefined();
+      expect(wireframeSkin(parent)).toBeUndefined();
+      expect(skin!.material).toBeInstanceOf(THREE.MeshMatcapMaterial);
+      expect(skin!.material).not.toBe(matcapMaterial);
+      expect(skin!.geometry.getAttribute('normal')).toBeTruthy();
+      occluder.dispose();
+    });
+
+    it("'depth-shaded-wireframe' composes both skins over the untouched occluder", () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.update([[0, 0, 0]], 0.15);
+      const geometryBefore = occluderMesh(parent)!.geometry;
+
+      occluder.setDebugStyle('depth-shaded-wireframe');
+
+      expect(shadedSkin(parent)).toBeDefined();
+      expect(wireframeSkin(parent)).toBeDefined();
+      expect(shadedSkin(parent)!.geometry).toBe(geometryBefore);
+      expect(wireframeSkin(parent)!.geometry).toBe(geometryBefore);
+      expect(geometryBefore.getAttribute('normal')).toBeTruthy();
+      expectOccluderUntouched(parent, geometryBefore);
+      occluder.dispose();
+    });
+
+    it("'off' removes every skin and is the construction default", () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.update([[0, 0, 0]], 0.15);
+      expect(meshes(parent)).toHaveLength(1); // default: depth-only mesh alone
+
+      occluder.setDebugStyle('depth-shaded-wireframe');
+      expect(meshes(parent)).toHaveLength(3);
+      occluder.setDebugStyle('off');
+      expect(meshes(parent)).toHaveLength(1);
+      expect(occluderMesh(parent)).toBeDefined();
+      occluder.dispose();
+    });
+
+    it('style switches are idempotent (no duplicate skins)', () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.update([[0, 0, 0]], 0.15);
+
+      occluder.setDebugStyle('depth-shaded-wireframe');
+      occluder.setDebugStyle('depth-shaded-wireframe');
+      expect(meshes(parent)).toHaveLength(3);
+      // Switching between shaded styles reuses the single shaded skin node.
+      occluder.setDebugStyle('matcap');
+      occluder.setDebugStyle('depth-shaded');
+      expect(meshes(parent)).toHaveLength(2);
+      occluder.dispose();
+    });
+
+    it('keeps all active skins in sync across update, applyMeshData and clear', () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.setDebugStyle('depth-shaded-wireframe');
+
+      // Sync path (update → swapGeometry).
+      occluder.update([[0, 0, 0]], 0.15);
+      let geometry = occluderMesh(parent)!.geometry;
+      expect(shadedSkin(parent)!.geometry).toBe(geometry);
+      expect(wireframeSkin(parent)!.geometry).toBe(geometry);
+      expect(geometry.getAttribute('normal')).toBeTruthy();
+
+      // Worker path (applyMeshData → swapGeometry) — same skins, new geometry.
+      const { positions, indices } = meshOccupiedCells([[1, 0, 0]], 0.15, {
+        greedy: true,
+      });
+      occluder.applyMeshData(positions, indices);
+      geometry = occluderMesh(parent)!.geometry;
+      expect(shadedSkin(parent)!.geometry).toBe(geometry);
+      expect(wireframeSkin(parent)!.geometry).toBe(geometry);
+      expect(geometry.getAttribute('normal')).toBeTruthy();
+
+      // clear() — skins must rebind to the new empty geometry too.
+      occluder.clear();
+      geometry = occluderMesh(parent)!.geometry;
+      expect(shadedSkin(parent)!.geometry).toBe(geometry);
+      expect(wireframeSkin(parent)!.geometry).toBe(geometry);
+      expect(geometry.getIndex()?.count ?? 0).toBe(0);
+      occluder.dispose();
+    });
+
+    it('dispose removes all skins, disposes their materials, and later calls are no-ops', () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.update([[0, 0, 0]], 0.15);
+      occluder.setDebugStyle('depth-shaded-wireframe');
+
+      const shadedMaterial = shadedSkin(parent)!.material as THREE.Material;
+      const wireMaterial = wireframeSkin(parent)!.material as THREE.Material;
+      let disposedCount = 0;
+      shadedMaterial.addEventListener('dispose', () => disposedCount++);
+      wireMaterial.addEventListener('dispose', () => disposedCount++);
+
+      occluder.dispose();
+      expect(parent.children).toHaveLength(0);
+      expect(disposedCount).toBe(2);
+      expect(() => occluder.setDebugStyle('matcap')).not.toThrow();
+      expect(parent.children).toHaveLength(0);
+    });
+  });
+
+  /**
    * Debug visualization (2026-06-29 testing feedback): when on, a VISIBLE shiny
    * matcap "skin" is added so the operator can judge the meshed surface, while
    * the original invisible depth-only mesh is left untouched — so occlusion is
    * provably unchanged. (A single transparent material would render in three.js's
    * transparent phase after opaque content, which would stop it occluding opaque
    * objects; the additive skin avoids that entirely.)
+   *
+   * Since 2026-07-02 `setDebugVisualization` is a deprecated thin wrapper over
+   * `setDebugStyle` (`enabled ? 'matcap' : 'off'`) — these tests double as the
+   * wrapper's regression suite, so existing consumers keep working unchanged.
    */
   describe('setDebugVisualization', () => {
     it('adds a visible semi-transparent matcap skin while keeping the depth-only occluder', () => {
