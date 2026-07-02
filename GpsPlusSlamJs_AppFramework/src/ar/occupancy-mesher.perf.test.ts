@@ -158,7 +158,11 @@ describe('occupancy mesher — deterministic large-scene perf/memory harness', (
    */
   it(
     'meshes ~20k cells within deterministic triangle/memory budgets, all strategies benched',
-    { timeout: 30_000 },
+    // 60 s: the harness needs ~28 s alone on a dev machine and vitest runs test
+    // FILES in parallel, so full-suite load reliably pushed it past the old
+    // 30 s limit (the budgets asserted below are deterministic counts, not
+    // wall-clock — a generous timeout does not weaken the gate).
+    { timeout: 60_000 },
     () => {
       const CELLS_PER_SIDE = 140; // 140×140×1 = 19,600 cells (≈ a long walk's surfaces)
       const { grid, cellCount, expectedPerFaceTriangles, cellSizeM } =
