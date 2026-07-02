@@ -63,6 +63,93 @@ function styleNeedsNormals(style: OccluderDebugStyle): boolean {
 }
 
 /**
+ * Depth-shaded debug-skin constants — **module constants, not user settings**
+ * (tune in code after the first on-device look; 2026-07-02 debug-viz-styles
+ * plan). Exported so the unit/property tests of the GLSL-mirror curves below
+ * pin the same numbers the shader bakes in.
+ */
+export const OCCLUDER_DEPTH_SHADE = {
+  /** Distance (m) where the fade starts — nearer stays full-bright cyan. */
+  FADE_START_M: 1.5,
+  /** Distance (m) where the fade bottoms out at {@link FADE_MIN_BRIGHTNESS}. */
+  FADE_END_M: 10,
+  /** Brightness floor far away — never fades to black, so distant mesh stays
+   *  inspectable (the reason the fog-to-background idea was rejected). */
+  FADE_MIN_BRIGHTNESS: 0.3,
+  /** Fresnel exponent — higher hugs the silhouette tighter. */
+  RIM_POWER: 2.5,
+  /** White-rim contribution at a fully grazing view angle. */
+  RIM_STRENGTH: 0.6,
+} as const;
+
+/** Far-distance fade target (dark desaturated blue) — keeps the occluder's
+ *  single-color cyan identity while clearly separating far from near. */
+const FADE_TARGET_RGB = [0.03, 0.07, 0.12] as const;
+
+/** GLSL `smoothstep` (clamped Hermite), mirrored exactly for the TS curves. */
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Pure TS mirror of the shader's **distance fade**: 1 at/inside FADE_START_M,
+ * smoothly down to FADE_MIN_BRIGHTNESS at/after FADE_END_M. The fragment color
+ * is `mix(darkBlue, matcapColor, fade)` — near = bright cyan, far = dark blue.
+ * Mirrored so the curve is unit-testable without a GPU (the
+ * `buildFullscreenOcclusionShader` GLSL-mirror precedent).
+ */
+export function occluderDepthFade(distanceM: number): number {
+  const { FADE_START_M, FADE_END_M, FADE_MIN_BRIGHTNESS } =
+    OCCLUDER_DEPTH_SHADE;
+  return (
+    1 -
+    (1 - FADE_MIN_BRIGHTNESS) * smoothstep(FADE_START_M, FADE_END_M, distanceM)
+  );
+}
+
+/**
+ * Pure TS mirror of the shader's **fresnel rim**: 0 where the surface faces
+ * the camera head-on (|cos| = 1), RIM_STRENGTH at a fully grazing angle
+ * (cos = 0) — silhouettes brighten, so overlapping shells read as separate.
+ *
+ * @param cosViewAngle `dot(normal, viewDir)` — cosine of the angle between the
+ *   surface normal and the view direction, in [-1, 1].
+ */
+export function occluderFresnelRim(cosViewAngle: number): number {
+  const { RIM_POWER, RIM_STRENGTH } = OCCLUDER_DEPTH_SHADE;
+  return RIM_STRENGTH * Math.pow(1 - Math.abs(cosViewAngle), RIM_POWER);
+}
+
+/** A number as a GLSL float literal (fixed decimals so it never reads as int). */
+function glslFloat(value: number): string {
+  return value.toFixed(4);
+}
+
+/**
+ * The fragment-shader snippet the depth-shaded material injects before
+ * `#include <opaque_fragment>` in three.js's matcap fragment shader — the
+ * point where `outgoingLight` (matcap-lit color), `normal` and `viewDir` /
+ * `vViewPosition` are all in scope. Exported so tests can pin the exact
+ * injected code. Constants are baked as literals (no uniforms — they are
+ * module constants by design, see {@link OCCLUDER_DEPTH_SHADE}).
+ */
+export function buildOccluderDepthShadeSnippet(): string {
+  const { FADE_START_M, FADE_END_M, FADE_MIN_BRIGHTNESS, RIM_POWER } =
+    OCCLUDER_DEPTH_SHADE;
+  const { RIM_STRENGTH } = OCCLUDER_DEPTH_SHADE;
+  const [r, g, b] = FADE_TARGET_RGB;
+  return [
+    '// Occluder debug depth-shading: distance fade + fresnel rim (2026-07-02).',
+    `float dbgDistance = length( vViewPosition );`,
+    `float dbgFade = 1.0 - ( 1.0 - ${glslFloat(FADE_MIN_BRIGHTNESS)} ) * smoothstep( ${glslFloat(FADE_START_M)}, ${glslFloat(FADE_END_M)}, dbgDistance );`,
+    `outgoingLight = mix( vec3( ${glslFloat(r)}, ${glslFloat(g)}, ${glslFloat(b)} ), outgoingLight, dbgFade );`,
+    `float dbgRim = ${glslFloat(RIM_STRENGTH)} * pow( 1.0 - abs( dot( normal, viewDir ) ), ${glslFloat(RIM_POWER)} );`,
+    `outgoingLight += vec3( 1.0 ) * dbgRim;`,
+  ].join('\n\t');
+}
+
+/**
  * Build a tiny procedural matcap texture (a shaded sphere with a specular
  * highlight) so the debug skin reads as a **shiny** surface with **no scene
  * lights** — `MeshMatcapMaterial` bakes the lighting into this lookup. Generated
@@ -394,12 +481,27 @@ export class OcclusionMesh {
 
   private getDepthShadedMaterial(): THREE.MeshMatcapMaterial {
     if (!this.depthShadedMaterial) {
-      this.depthShadedMaterial = new THREE.MeshMatcapMaterial({
+      const material = new THREE.MeshMatcapMaterial({
         matcap: this.getMatcapTexture(),
         transparent: true,
         opacity: DEBUG_SKIN_OPACITY,
         depthWrite: false,
       });
+      // Extend the stock matcap fragment shader with the distance fade +
+      // fresnel rim, injected right before the output write so it can modify
+      // `outgoingLight` (see buildOccluderDepthShadeSnippet for the math and
+      // the TS mirrors that test it). Compiles once per program.
+      material.onBeforeCompile = (shader) => {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <opaque_fragment>',
+          `${buildOccluderDepthShadeSnippet()}\n\t#include <opaque_fragment>`
+        );
+      };
+      // Distinct cache key: without it three.js would consider this program
+      // interchangeable with the unmodified matcap material's and could skip
+      // the injected shader variant.
+      material.customProgramCacheKey = () => 'occluder-depth-shaded';
+      this.depthShadedMaterial = material;
     }
     return this.depthShadedMaterial;
   }

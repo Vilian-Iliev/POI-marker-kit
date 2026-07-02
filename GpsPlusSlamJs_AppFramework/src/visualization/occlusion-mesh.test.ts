@@ -17,7 +17,13 @@ import type { GridCell } from '../ar/bresenham3d';
 import type { Vector3 } from 'gps-plus-slam-js';
 import { WEBXR_TO_NUE } from '../ar/webxr-nue-basis';
 import { meshOccupiedCells } from '../ar/occupancy-mesher';
-import { OcclusionMesh } from './occlusion-mesh';
+import {
+  OcclusionMesh,
+  OCCLUDER_DEPTH_SHADE,
+  buildOccluderDepthShadeSnippet,
+  occluderDepthFade,
+  occluderFresnelRim,
+} from './occlusion-mesh';
 
 function findMesh(parent: THREE.Object3D): THREE.Mesh | undefined {
   return parent.children.find((c) => c instanceof THREE.Mesh) as
@@ -375,6 +381,93 @@ describe('OcclusionMesh', () => {
       expect(disposedCount).toBe(2);
       expect(() => occluder.setDebugStyle('matcap')).not.toThrow();
       expect(parent.children).toHaveLength(0);
+    });
+  });
+
+  /**
+   * Depth-shaded material (2026-07-02 debug-viz-styles plan): the matcap
+   * material extended via onBeforeCompile with a camera-distance fade (near =
+   * bright cyan, far = dark desaturated blue) and a white fresnel rim on
+   * silhouettes, so overlapping mesh layers read as separate shells. The GLSL
+   * cannot run headless, so these tests pin (a) the exact injected snippet and
+   * its placement, and (b) the curve MATH via the exported pure TS mirrors of
+   * the fade and rim (the `buildFullscreenOcclusionShader` GLSL-mirror
+   * precedent from the live-occluder work).
+   */
+  describe('depth-shaded material', () => {
+    it('injects the fade+rim snippet before the opaque fragment include', () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.update([[0, 0, 0]], 0.15);
+      occluder.setDebugStyle('depth-shaded');
+
+      const mat = shadedSkin(parent)!.material as THREE.MeshMatcapMaterial;
+      const shader = {
+        vertexShader: '',
+        fragmentShader:
+          'void main() {\n\tvec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;\n\t#include <opaque_fragment>\n}',
+        uniforms: {},
+      };
+      mat.onBeforeCompile(shader as never, null as never);
+
+      const snippet = buildOccluderDepthShadeSnippet();
+      expect(shader.fragmentShader).toContain(snippet);
+      // Injected BEFORE the output write so it can modify outgoingLight.
+      expect(shader.fragmentShader.indexOf(snippet)).toBeLessThan(
+        shader.fragmentShader.indexOf('#include <opaque_fragment>')
+      );
+      // The snippet reads the view-space position + normal the matcap shader
+      // provides, and bakes the module constants as GLSL float literals.
+      expect(snippet).toContain('vViewPosition');
+      expect(snippet).toContain('smoothstep');
+      expect(snippet).toContain(OCCLUDER_DEPTH_SHADE.FADE_START_M.toFixed(4));
+      expect(snippet).toContain(OCCLUDER_DEPTH_SHADE.FADE_END_M.toFixed(4));
+      expect(snippet).toContain(OCCLUDER_DEPTH_SHADE.RIM_POWER.toFixed(4));
+      occluder.dispose();
+    });
+
+    it('uses a custom program cache key so three.js does not reuse the plain matcap program', () => {
+      const parent = new THREE.Group();
+      const occluder = new OcclusionMesh(parent);
+      occluder.update([[0, 0, 0]], 0.15);
+
+      occluder.setDebugStyle('matcap');
+      const plain = shadedSkin(parent)!.material as THREE.MeshMatcapMaterial;
+      occluder.setDebugStyle('depth-shaded');
+      const shaded = shadedSkin(parent)!.material as THREE.MeshMatcapMaterial;
+
+      expect(shaded.customProgramCacheKey()).not.toBe(
+        plain.customProgramCacheKey()
+      );
+      occluder.dispose();
+    });
+
+    it('fade mirror: 1 near, FADE_MIN_BRIGHTNESS far, smooth in between', () => {
+      const { FADE_START_M, FADE_END_M, FADE_MIN_BRIGHTNESS } =
+        OCCLUDER_DEPTH_SHADE;
+      expect(occluderDepthFade(0)).toBe(1);
+      expect(occluderDepthFade(FADE_START_M)).toBe(1);
+      expect(occluderDepthFade(FADE_END_M)).toBeCloseTo(
+        FADE_MIN_BRIGHTNESS,
+        10
+      );
+      expect(occluderDepthFade(FADE_END_M + 100)).toBeCloseTo(
+        FADE_MIN_BRIGHTNESS,
+        10
+      );
+      const mid = occluderDepthFade((FADE_START_M + FADE_END_M) / 2);
+      expect(mid).toBeGreaterThan(FADE_MIN_BRIGHTNESS);
+      expect(mid).toBeLessThan(1);
+    });
+
+    it('rim mirror: 0 head-on, RIM_STRENGTH at grazing', () => {
+      const { RIM_STRENGTH } = OCCLUDER_DEPTH_SHADE;
+      expect(occluderFresnelRim(1)).toBe(0); // facing the camera
+      expect(occluderFresnelRim(-1)).toBe(0); // back face head-on
+      expect(occluderFresnelRim(0)).toBeCloseTo(RIM_STRENGTH, 10); // grazing
+      const between = occluderFresnelRim(0.5);
+      expect(between).toBeGreaterThan(0);
+      expect(between).toBeLessThan(RIM_STRENGTH);
     });
   });
 

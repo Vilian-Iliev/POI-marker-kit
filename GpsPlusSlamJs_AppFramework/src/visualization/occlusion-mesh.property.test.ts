@@ -23,7 +23,12 @@ import * as THREE from 'three';
 import type { GridCell } from '../ar/bresenham3d';
 import { meshOccupiedCells } from '../ar/occupancy-mesher';
 import type { OccluderDebugStyle } from '../state/recording-options';
-import { OcclusionMesh } from './occlusion-mesh';
+import {
+  OcclusionMesh,
+  OCCLUDER_DEPTH_SHADE,
+  occluderDepthFade,
+  occluderFresnelRim,
+} from './occlusion-mesh';
 
 const CELL_SIZE = 0.15;
 
@@ -140,6 +145,52 @@ describe('OcclusionMesh.setDebugStyle — properties', () => {
         occluder.dispose();
         expect(parent.children).toHaveLength(0);
       })
+    );
+  });
+
+  /**
+   * The depth-shaded GLSL cannot execute headless, so its pure TS mirrors carry
+   * the curve correctness: for ANY distance the fade must stay inside
+   * [FADE_MIN_BRIGHTNESS, 1] and never increase with distance; for ANY view
+   * angle the rim must stay inside [0, RIM_STRENGTH] and never increase as the
+   * surface turns toward the camera. These bounds are what keep the shader's
+   * output color finite and the debug skin readable at every range.
+   */
+  it('depth-fade mirror is bounded and monotonically non-increasing', () => {
+    const { FADE_MIN_BRIGHTNESS } = OCCLUDER_DEPTH_SHADE;
+    fc.assert(
+      fc.property(
+        fc.double({ min: 0, max: 1000, noNaN: true }),
+        fc.double({ min: 0, max: 1000, noNaN: true }),
+        (a, b) => {
+          const near = Math.min(a, b);
+          const far = Math.max(a, b);
+          const fadeNear = occluderDepthFade(near);
+          const fadeFar = occluderDepthFade(far);
+          expect(fadeNear).toBeGreaterThanOrEqual(FADE_MIN_BRIGHTNESS);
+          expect(fadeNear).toBeLessThanOrEqual(1);
+          expect(fadeFar).toBeLessThanOrEqual(fadeNear);
+        }
+      )
+    );
+  });
+
+  it('fresnel-rim mirror is bounded and non-increasing toward head-on views', () => {
+    const { RIM_STRENGTH } = OCCLUDER_DEPTH_SHADE;
+    fc.assert(
+      fc.property(
+        fc.double({ min: -1, max: 1, noNaN: true }),
+        fc.double({ min: -1, max: 1, noNaN: true }),
+        (a, b) => {
+          const grazing = Math.min(Math.abs(a), Math.abs(b));
+          const headOn = Math.max(Math.abs(a), Math.abs(b));
+          const rimGrazing = occluderFresnelRim(grazing);
+          const rimHeadOn = occluderFresnelRim(headOn);
+          expect(rimGrazing).toBeGreaterThanOrEqual(0);
+          expect(rimGrazing).toBeLessThanOrEqual(RIM_STRENGTH);
+          expect(rimHeadOn).toBeLessThanOrEqual(rimGrazing);
+        }
+      )
     );
   });
 
