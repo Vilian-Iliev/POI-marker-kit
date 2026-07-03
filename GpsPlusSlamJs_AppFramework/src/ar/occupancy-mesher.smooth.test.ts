@@ -197,6 +197,23 @@ describe("occupancy mesher — 'smooth' surface-nets (dual contouring)", () => {
     }
   });
 
+  it('rejects a non-finite getCellPoint result — falls back to the geometric centre instead of poisoning welded vertices (PR #152 review)', () => {
+    // Why this matters: the worker path (`packMeshRequest`/`runMeshRequest`)
+    // uses NaN as its "no centroid" wire sentinel, so a NaN centroid already
+    // degrades to the geometric fallback off-thread. Without the same guard
+    // here, the direct path baked the NaN into every welded vertex whose dual
+    // cell averages that cell — corrupting the geometry AND breaking
+    // `runMeshRequest`'s documented byte-identical parity with a direct mesh.
+    const cells = raggedFloor();
+    const poisoned = meshOccupiedCells(cells, CELL, {
+      mode: 'smooth',
+      getCellPoint: () => [NaN, 0, 0],
+    });
+    const plain = meshOccupiedCells(cells, CELL, { mode: 'smooth' });
+    expect(Array.from(poisoned.positions).every(Number.isFinite)).toBe(true);
+    expect(Array.from(poisoned.positions)).toEqual(Array.from(plain.positions));
+  });
+
   it('welds vertices (far fewer than 4 per quad) and has no T-junctions', () => {
     const cells = raggedFloor();
     const smooth = meshOccupiedCells(cells, CELL, {

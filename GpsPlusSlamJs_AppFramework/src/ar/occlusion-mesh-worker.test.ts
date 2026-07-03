@@ -90,6 +90,35 @@ describe('occlusion mesh worker — pack/run round-trip', () => {
     expect(Array.from(response.indices)).toEqual(Array.from(direct.indices));
   });
 
+  it('round-trips a NON-FINITE centroid identically to a direct mesh (PR #152 review)', () => {
+    // Why this matters: the wire protocol packs "no centroid" as NaN, so a
+    // provider that (buggily) returns a NaN centroid is indistinguishable from
+    // null on the worker side and degrades to the geometric fallback there.
+    // Before the mesher-side finite guard, the direct path instead baked the
+    // NaN into vertices — the SAME request meshed differently on- vs off-thread,
+    // breaking this file's byte-identical parity contract.
+    const cells = solidBox(3, 1, 3);
+    const full = centroidProvider(cells);
+    // NaN for one column, a partially-finite corruption for another: the first
+    // hits the wire sentinel, the second survives the wire and must be rejected
+    // by the mesher itself on BOTH paths.
+    const gp = (c: GridCell): Vector3 | null =>
+      c[0] === 0 ? [NaN, NaN, NaN] : c[0] === 1 ? [0.01, NaN, 0.02] : full(c);
+
+    const { request } = packMeshRequest(2, cells, CELL, 'smooth', gp);
+    const { response } = runMeshRequest(request);
+    const direct = meshOccupiedCells(cells, CELL, {
+      mode: 'smooth',
+      getCellPoint: gp,
+    });
+
+    expect(Array.from(direct.positions).every(Number.isFinite)).toBe(true);
+    expect(Array.from(response.positions)).toEqual(
+      Array.from(direct.positions)
+    );
+    expect(Array.from(response.indices)).toEqual(Array.from(direct.indices));
+  });
+
   it('transfers the packed buffers (main-thread arrays are detached after posting)', () => {
     const cells = solidBox(2, 2, 2);
     const { request, transfer } = packMeshRequest(

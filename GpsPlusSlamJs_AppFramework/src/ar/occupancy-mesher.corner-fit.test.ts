@@ -257,6 +257,23 @@ describe("occupancy mesher — 'corner-fit' deformed-corner cube mode", () => {
     }
   });
 
+  it('rejects a non-finite getCellPoint result — an Infinity centroid must not poison the shared corner offsets (PR #152 review)', () => {
+    // Why this matters: pass 1 accumulates each centroid's sub-cell offset into
+    // every one of the cell's 8 shared corners — a single ±Infinity component
+    // spread Infinity/NaN into every touching corner vertex. A non-finite
+    // centroid must instead degrade exactly like a null one (geometric corner),
+    // which is also what the worker path's NaN wire sentinel produces, keeping
+    // `runMeshRequest`'s byte-identical parity with a direct mesh.
+    const cells = solidBox(2, 2, 2);
+    const poisoned = meshOccupiedCells(cells, CELL, {
+      mode: 'corner-fit',
+      getCellPoint: () => [0.01, Infinity, 0.02],
+    });
+    const plain = meshOccupiedCells(cells, CELL, { mode: 'corner-fit' });
+    expect(Array.from(poisoned.positions).every(Number.isFinite)).toBe(true);
+    expect(Array.from(poisoned.positions)).toEqual(Array.from(plain.positions));
+  });
+
   it('still returns one AABB per occupied cell', () => {
     const cells = solidBox(2, 2, 2);
     const { aabbs } = meshOccupiedCells(cells, CELL, {

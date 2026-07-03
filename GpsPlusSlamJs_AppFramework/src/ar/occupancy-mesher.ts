@@ -104,6 +104,9 @@ export interface MeshOccupiedCellsOptions {
    * mean of its occupied corners' centroids) and `'corner-fit'` (corners nudged
    * by the mean sub-cell offset) instead of the lattice centre. Ignored by
    * `'per-face'`/`'greedy'`. When absent, both fall back to geometric positions.
+   * A `null` or non-finite result degrades that cell to its geometric position
+   * too — a NaN/Infinity centroid must not poison welded vertices (and NaN is
+   * the worker wire protocol's "no centroid" sentinel, so both paths agree).
    */
   readonly getCellPoint?: (cell: GridCell) => Vector3 | null;
 }
@@ -247,6 +250,18 @@ function isPackableCell(cell: GridCell): boolean {
     }
   }
   return true;
+}
+
+/** True iff all three components are finite. A non-finite measured centroid
+ *  from `getCellPoint` (an upstream tracking/accumulation glitch) must degrade
+ *  to the geometric fallback exactly like a `null` one — otherwise it poisons
+ *  every welded vertex / shared corner that averages it, and it also breaks
+ *  `runMeshRequest`'s byte-identical parity with a direct mesh (the worker wire
+ *  protocol packs "no centroid" as NaN, so NaN already falls back off-thread). */
+function isFiniteVector3(v: Vector3): boolean {
+  return (
+    Number.isFinite(v[0]) && Number.isFinite(v[1]) && Number.isFinite(v[2])
+  );
 }
 
 /**
@@ -469,7 +484,7 @@ function buildSmooth(
       scratch[1] = y;
       scratch[2] = z;
       const cp = getCellPoint(scratch);
-      if (cp) {
+      if (cp && isFiniteVector3(cp)) {
         p = [cp[0], cp[1], cp[2]];
       }
     }
@@ -632,7 +647,7 @@ function buildCornerFit(
   >();
   for (const cell of uniqueCells) {
     const cp = getCellPoint ? getCellPoint(cell) : null;
-    if (!cp) {
+    if (!cp || !isFiniteVector3(cp)) {
       continue;
     }
     // Offset of the measured centroid from this cell's geometric centre.
