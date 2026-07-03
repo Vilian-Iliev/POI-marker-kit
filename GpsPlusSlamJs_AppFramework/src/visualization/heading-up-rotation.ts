@@ -42,6 +42,10 @@ const RAD_TO_DEG = 180 / Math.PI;
 // Baseline tilt quaternion, computed once (no per-call allocation churn).
 const TILT = quat.setAxisAngle(quat.create(), [1, 0, 0], TILT_X_RAD);
 
+/** World-up yaw axis, hoisted so the per-frame call allocates nothing
+ *  (`setAxisAngle` only reads it). */
+const UP_AXIS: readonly [number, number, number] = [0, 1, 0];
+
 const _yaw = quat.create();
 const _out = quat.create();
 
@@ -61,7 +65,7 @@ const _out = quat.create();
 export function headingUpQuat(
   azimuthDeg: number
 ): [number, number, number, number] {
-  quat.setAxisAngle(_yaw, [0, 1, 0], YAW_SIGN * azimuthDeg * DEG_TO_RAD);
+  quat.setAxisAngle(_yaw, UP_AXIS, YAW_SIGN * azimuthDeg * DEG_TO_RAD);
   // Apply tilt first, then yaw: q = yaw · tilt.
   quat.multiply(_out, _yaw, TILT);
   return [_out[0], _out[1], _out[2], _out[3]];

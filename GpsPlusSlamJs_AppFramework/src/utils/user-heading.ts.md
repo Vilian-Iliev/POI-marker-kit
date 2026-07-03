@@ -44,6 +44,12 @@ alignment matrix. Feeds the live/replay map overlay's view-direction line
   so a bad sensor sample degrades to `null` instead of emitting a `NaN` bearing
   that would poison `headingUpQuat`. The guard is on the derived values (not a
   per-element input scan) to avoid a per-frame closure allocation at 30–60 Hz.
+- **Zero-copy, read-only inputs (2026-07-04).** The caller's quaternion and
+  alignment matrix are passed straight into gl-matrix (`Quaternion` satisfies
+  `ReadonlyQuat`, `Matrix4` satisfies `ReadonlyMat4`) — no per-call
+  `mat4.fromValues` copy on this 30–60 Hz path. The transforms only read them;
+  the frozen-input test pins that contract (a write would throw under strict
+  mode and fail the value comparison).
 - **Position-independent.** The heading is a pure direction; the consumer draws
   the line only when it also has a user-position dot to anchor it to.
 - **Lives in the app-framework, NOT the library's `orientation-heading.ts`** —

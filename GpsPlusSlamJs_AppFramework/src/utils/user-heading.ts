@@ -33,7 +33,7 @@
  * bearing, so `atan2(East, North)` is both simpler and undistorted.
  */
 
-import { vec3, mat4, quat } from 'gl-matrix';
+import { vec3 } from 'gl-matrix';
 import type { Matrix4, Quaternion } from 'gps-plus-slam-js';
 
 /** Camera-forward basis vector in the NUE-AR frame: `webxrToNUE([0,0,-1]) = [1,0,0]`. */
@@ -69,7 +69,6 @@ const _forward = vec3.create();
 const _origin = vec3.create();
 const _tip = vec3.create();
 const _dir = vec3.create();
-const _q = quat.create();
 
 /**
  * Compute the user's absolute view-direction bearing in degrees clockwise from
@@ -86,23 +85,22 @@ export function computeUserHeadingDeg(input: UserHeadingInput): number | null {
     return null;
   }
 
-  // Camera forward in the AR-NUE frame.
-  quat.set(
-    _q,
-    odometryRotation[0],
-    odometryRotation[1],
-    odometryRotation[2],
-    odometryRotation[3]
-  );
-  vec3.transformQuat(_forward, NUE_CAMERA_FORWARD, _q);
+  // Camera forward in the AR-NUE frame. The stored quaternion is already the
+  // `[x,y,z,w]` 4-tuple `transformQuat` reads (`Quaternion` satisfies
+  // `ReadonlyQuat`), so it is used directly — it is only read, never mutated.
+  vec3.transformQuat(_forward, NUE_CAMERA_FORWARD, odometryRotation);
 
   // Rotate the forward DIRECTION into world NUE via the alignment matrix.
   // Transform two points and subtract so the matrix's translation cancels,
   // leaving exactly the linear (rotation/scale) part applied to the direction.
-  const m = mat4.fromValues(...alignmentMatrix);
+  // The alignment matrix is already the flat column-major 16-tuple
+  // `vec3.transformMat4` reads (`Matrix4` satisfies `ReadonlyMat4`), so it is
+  // used directly — copying it into a fresh `Float32Array(16)` per call used to
+  // dominate this 30–60 Hz frame-loop path's allocations. The transforms only
+  // READ the matrix (pinned by the frozen-input test), so sharing is safe.
   vec3.set(_origin, 0, 0, 0);
-  vec3.transformMat4(_origin, _origin, m);
-  vec3.transformMat4(_tip, _forward, m);
+  vec3.transformMat4(_origin, _origin, alignmentMatrix);
+  vec3.transformMat4(_tip, _forward, alignmentMatrix);
   vec3.subtract(_dir, _tip, _origin);
 
   const north = _dir[0];

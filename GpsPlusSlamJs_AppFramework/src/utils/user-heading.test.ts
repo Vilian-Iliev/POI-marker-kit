@@ -112,6 +112,25 @@ describe('computeUserHeadingDeg', () => {
     expect(heading!).toBeCloseTo(180, 2);
   });
 
+  it('only READS its inputs — frozen quaternion/matrix work and stay unchanged (zero-copy contract)', () => {
+    // Why this test matters: since 2026-07-04 the kernel passes the caller's
+    // quaternion/matrix straight into gl-matrix (no per-call copy — this runs
+    // at 30–60 Hz). That is only sound while gl-matrix never writes to them.
+    // Frozen inputs make an accidental write throw under strict mode (ESM),
+    // and the value comparison guards against silent mutation regardless.
+    const rotation = Object.freeze([0, 0, 0, 1] as const);
+    const matrix = Object.freeze([...ALIGN_NORTH_TO_EAST] as const);
+    const matrixSnapshot = [...matrix];
+    const heading = computeUserHeadingDeg({
+      odometryRotation: rotation,
+      alignmentMatrix: matrix,
+    });
+    expect(heading).not.toBeNull();
+    expect(heading!).toBeCloseTo(90, 2);
+    expect([...matrix]).toEqual(matrixSnapshot);
+    expect([...rotation]).toEqual([0, 0, 0, 1]);
+  });
+
   it('returns null before the first alignment solve (matrix null)', () => {
     expect(
       computeUserHeadingDeg({
