@@ -89,9 +89,19 @@ export interface OccupancyCubesVisualizerOptions {
    * are deterministic. Default `Math.random`.
    */
   readonly rng?: () => number;
+  /**
+   * Radius (meters, raw WebXR) of the viewer-local window used by the
+   * over-cap nearest-N selection (Step 1.1 of the 2026-07-03 long-session
+   * fps plan): cells beyond it are dropped before scoring/sorting, bounding
+   * the per-refresh cost by the neighbourhood instead of the whole session.
+   * At 15 cm voxels and the 2000-instance cap a 10 m sphere is already
+   * generous. Non-finite / non-positive = unbounded (legacy). Default 10.
+   */
+  readonly overCapRadiusM?: number;
 }
 
 const DEFAULT_MAX_INSTANCES = 2000;
+const DEFAULT_OVER_CAP_RADIUS_M = 10;
 const DEFAULT_CUBE_SIZE_M = 0.025;
 const MESH_NAME = 'occupancy-cubes';
 
@@ -104,6 +114,7 @@ export class OccupancyCubesVisualizer {
   private readonly minObservations: number;
   private readonly cubeSizeM: number;
   private readonly rng: () => number;
+  private readonly overCapRadiusM: number;
   private readonly mesh: THREE.InstancedMesh;
   private readonly geometry: THREE.BoxGeometry;
   private readonly material: THREE.MeshBasicMaterial;
@@ -122,6 +133,10 @@ export class OccupancyCubesVisualizer {
     this.minObservations = options.minObservations ?? 1;
     this.cubeSizeM = options.cubeSizeM ?? DEFAULT_CUBE_SIZE_M;
     this.rng = options.rng ?? Math.random;
+    // Non-positive / non-finite opts out of the radius bound (legacy).
+    const radius = options.overCapRadiusM ?? DEFAULT_OVER_CAP_RADIUS_M;
+    this.overCapRadiusM =
+      Number.isFinite(radius) && radius > 0 ? radius : Infinity;
     const maxInstances = options.maxInstances ?? DEFAULT_MAX_INSTANCES;
 
     this.geometry = new THREE.BoxGeometry(1, 1, 1);
@@ -181,7 +196,8 @@ export class OccupancyCubesVisualizer {
         occupied,
         capacity,
         viewerPose.cameraPos,
-        positionOf
+        positionOf,
+        this.overCapRadiusM
       ).map(({ item, pos }) => ({ cell: item, pos }));
     } else {
       drawn = pickRandomSubset(occupied, capacity, this.rng).map((cell) => ({
@@ -265,23 +281,43 @@ function isFiniteVec3(v: readonly [number, number, number]): boolean {
  *
  * Squared distance is sufficient — `sqrt` is monotonic, so it never changes
  * the ranking, and skipping it avoids `count` square roots per repaint.
+ *
+ * `maxRadius` (Step 1.1 of the 2026-07-03 long-session fps plan) drops items
+ * farther than that from `eye` BEFORE scoring/sorting, shrinking the sort
+ * from O(N log N) over every cell ever seen to O(K log K) over the local
+ * neighbourhood — the linear-in-session-length term behind the long-walk fps
+ * decline. Behaviour-preserving whenever the count-th nearest item lies
+ * within the radius (property-tested); when fewer than `count` items survive
+ * the filter, only those are returned — distant cubes vanish by design (plan
+ * §Risks). Omitted / non-finite radius = unbounded (legacy behaviour).
  */
 export function pickNearestSubset<T>(
   items: readonly T[],
   count: number,
   eye: readonly [number, number, number],
-  positionOf: (item: T) => readonly [number, number, number]
+  positionOf: (item: T) => readonly [number, number, number],
+  maxRadius?: number
 ): Array<{ item: T; pos: readonly [number, number, number] }> {
-  const scored = items.map((item) => {
+  const maxD2 =
+    maxRadius !== undefined && Number.isFinite(maxRadius)
+      ? maxRadius * maxRadius
+      : Infinity;
+  const scored: Array<{
+    item: T;
+    pos: readonly [number, number, number];
+    d2: number;
+  }> = [];
+  for (const item of items) {
     const pos = positionOf(item);
     const dx = pos[0] - eye[0];
     const dy = pos[1] - eye[1];
     const dz = pos[2] - eye[2];
-    return { item, pos, d2: dx * dx + dy * dy + dz * dz };
-  });
-  // Stable ascending sort by squared distance. At a few thousand cells and
-  // ~1–2 Hz this O(n log n) is negligible (plan §3 cost note); a coarse
-  // radius pre-filter is the escape hatch if a pathological grid makes it hot.
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 <= maxD2) {
+      scored.push({ item, pos, d2 });
+    }
+  }
+  // Stable ascending sort by squared distance over the (radius-bounded) set.
   scored.sort((a, b) => a.d2 - b.d2);
   return scored
     .slice(0, Math.max(0, count))

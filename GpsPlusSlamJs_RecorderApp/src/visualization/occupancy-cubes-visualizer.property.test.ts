@@ -118,4 +118,97 @@ describe('pickNearestSubset', () => {
     expect(pickNearestSubset(points, 0, [0, 0, 0], (p) => p)).toHaveLength(0);
     expect(pickNearestSubset(points, -5, [0, 0, 0], (p) => p)).toHaveLength(0);
   });
+
+  // --- Radius pre-filter (Step 1.1 of the 2026-07-03 long-session fps plan) ---
+  // Why these properties matter: on a long walk the over-cap sort runs over
+  // every minConfidence-passing cell ever seen (~40k after 5 min in the
+  // 2026-07-02 corpus). The radius pre-filter bounds the scored/sorted set to
+  // the viewer's neighbourhood — but it must be BEHAVIOUR-PRESERVING whenever
+  // the cap'th-nearest cell lies within the radius, or the cubes would change
+  // appearance for no reason.
+
+  describe('maxRadius pre-filter', () => {
+    const arbRadius = finite(0.5, 120);
+
+    it('is behaviour-preserving when the count-th nearest cell lies within the radius', () => {
+      fc.assert(
+        fc.property(
+          arbPoints,
+          fc.integer({ min: 1, max: 60 }),
+          arbVec3,
+          arbRadius,
+          (points, count, eye, radius) => {
+            const unfiltered = pickNearestSubset(points, count, eye, (p) => p);
+            const last = unfiltered[unfiltered.length - 1];
+            // Precondition of the property: the selection already fits in R.
+            fc.pre(last === undefined || d2(last.pos, eye) <= radius * radius);
+            const filtered = pickNearestSubset(
+              points,
+              count,
+              eye,
+              (p) => p,
+              radius
+            );
+            expect(filtered).toEqual(unfiltered);
+          }
+        )
+      );
+    });
+
+    it('never returns a cell beyond the radius', () => {
+      fc.assert(
+        fc.property(
+          arbPoints,
+          fc.integer({ min: 0, max: 60 }),
+          arbVec3,
+          arbRadius,
+          (points, count, eye, radius) => {
+            const result = pickNearestSubset(
+              points,
+              count,
+              eye,
+              (p) => p,
+              radius
+            );
+            for (const { pos } of result) {
+              expect(d2(pos, eye)).toBeLessThanOrEqual(radius * radius);
+            }
+          }
+        )
+      );
+    });
+
+    it('returns exactly the within-radius cells when fewer than count survive (distant cells vanish by design)', () => {
+      fc.assert(
+        fc.property(arbPoints, arbVec3, arbRadius, (points, eye, radius) => {
+          const within = points.filter((p) => d2(p, eye) <= radius * radius);
+          // count larger than the whole input: the only bound left is R.
+          const result = pickNearestSubset(
+            points,
+            points.length + 10,
+            eye,
+            (p) => p,
+            radius
+          );
+          expect(result).toHaveLength(within.length);
+        })
+      );
+    });
+
+    it('an omitted or non-finite radius means unbounded (legacy behaviour)', () => {
+      fc.assert(
+        fc.property(
+          arbPoints,
+          fc.integer({ min: 0, max: 60 }),
+          arbVec3,
+          (points, count, eye) => {
+            const legacy = pickNearestSubset(points, count, eye, (p) => p);
+            expect(
+              pickNearestSubset(points, count, eye, (p) => p, Infinity)
+            ).toEqual(legacy);
+          }
+        )
+      );
+    });
+  });
 });
