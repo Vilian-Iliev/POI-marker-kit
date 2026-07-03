@@ -193,6 +193,13 @@ export class OccupancyGrid {
       return 0;
     }
     const cameraCell = this.cellForPosition(sample.cameraPos);
+    // An out-of-envelope camera cell cannot be carved FROM safely: the packed
+    // keys of the walk's out-of-range prefix alias unrelated in-range cells
+    // (base-2^17 encoding), so an unguarded carve would DELETE real records
+    // ~131 072 cells away. Skip carving for such a sample (endpoints are still
+    // recorded — they have their own range check below); a camera ±9.83 km
+    // from the session origin never occurs in a WebXR local space anyway.
+    const cameraInRange = cellInKeyRange(cameraCell);
     // Pass 1: carve free space along every ray, collecting endpoint cells
     // (with the observing point's color, if any — Iter 8).
     //
@@ -219,7 +226,7 @@ export class OccupancyGrid {
       if (!cellInKeyRange(cell)) {
         continue;
       }
-      if (!cellsEqual(cameraCell, cell)) {
+      if (cameraInRange && !cellsEqual(cameraCell, cell)) {
         const key = cellKey(cell);
         if (!carvedEndpointKeys.has(key)) {
           carvedEndpointKeys.add(key);
@@ -479,6 +486,11 @@ export class OccupancyGrid {
    * `cellSizeM/2` of the cell center per axis.
    */
   getCellPoint(cell: GridCell): Vector3 | null {
+    // Out-of-envelope cells alias in-range packed keys (±65 535/axis, ≈±9.83 km
+    // at the default cell size) — answer null, never another cell's data.
+    if (!cellInKeyRange(cell)) {
+      return null;
+    }
     const record = this.cells.get(cellKey(cell));
     if (!record || record.count === 0) {
       return null;
@@ -497,6 +509,10 @@ export class OccupancyGrid {
    * height-based coloring. Channels are rounded and clamped to 0–255.
    */
   getCellColor(cell: GridCell): RgbTuple | null {
+    // Same envelope guard as getCellPoint — aliased keys must not leak colors.
+    if (!cellInKeyRange(cell)) {
+      return null;
+    }
     const record = this.cells.get(cellKey(cell));
     if (!record || record.colorCount === 0) {
       return null;
@@ -523,19 +539,24 @@ export class OccupancyGrid {
     if (!isFiniteTriple(startPos) || !isFiniteTriple(endPos)) {
       return null;
     }
+    const startCell = this.cellForPosition(startPos);
+    const endCell = this.cellForPosition(endPos);
+    // Envelope guard: with an out-of-range endpoint the walk's packed keys
+    // alias unrelated in-range cells, so a "hit" would report bogus geometry.
+    // (Between two in-range cells every bresenham cell is in range — the walk
+    // stays inside their bounding box.)
+    if (!cellInKeyRange(startCell) || !cellInKeyRange(endCell)) {
+      return null;
+    }
     let hit: GridCell | null = null;
-    bresenham3d(
-      this.cellForPosition(startPos),
-      this.cellForPosition(endPos),
-      (cell) => {
-        const record = this.cells.get(cellKey(cell));
-        if (record && record.count >= minObservations) {
-          hit = cell;
-          return false; // ray can stop at the first hit
-        }
-        return true;
+    bresenham3d(startCell, endCell, (cell) => {
+      const record = this.cells.get(cellKey(cell));
+      if (record && record.count >= minObservations) {
+        hit = cell;
+        return false; // ray can stop at the first hit
       }
-    );
+      return true;
+    });
     return hit ? this.getCellCenter(hit) : null;
   }
 

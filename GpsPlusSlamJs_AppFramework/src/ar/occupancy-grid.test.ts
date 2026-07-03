@@ -354,6 +354,58 @@ describe('OccupancyGrid', () => {
     });
   });
 
+  describe('key-range envelope hardening (PR #144/#145/#147 reviews)', () => {
+    // Why these tests matter: the packed numeric cell key is only collision-free
+    // within ±65 535 per axis (±9.83 km at the 0.15 m default). Beyond that the
+    // base-2^17 encoding ALIASES — e.g. key([0, 65537, z]) === key([1, −65535, z])
+    // and key([0, 65536, z]) === key([1, 0, z]) — so an unguarded out-of-envelope
+    // lookup would return an unrelated cell's data (wrong-but-plausible, worse
+    // than null) and an out-of-envelope carve walk would DELETE unrelated
+    // in-range records. Stored keys were already guarded (addSample endpoint
+    // check); these pin the same envelope on the public lookups and the
+    // camera-side carve.
+
+    it('getCellPoint/getCellColor return null for an out-of-envelope cell even when its packed key aliases an occupied cell', () => {
+      const grid = new OccupancyGrid({ cellSizeM: 1 });
+      // Occupy [1, −65535, −2] (in range; −65535 is the envelope edge).
+      grid.addSample(makeColoredSample([1, -65535, 0], 2, [10, 20, 30]));
+      expect(grid.getCellPoint([1, -65535, -2])).not.toBeNull();
+      expect(grid.getCellColor([1, -65535, -2])).not.toBeNull();
+      // [0, 65537, −2] is out of envelope and packs to the SAME key.
+      expect(grid.getCellPoint([0, 65537, -2])).toBeNull();
+      expect(grid.getCellColor([0, 65537, -2])).toBeNull();
+    });
+
+    it('raycast returns null instead of an aliased hit when an endpoint cell is out of envelope', () => {
+      const grid = new OccupancyGrid({ cellSizeM: 1 });
+      grid.addSample(makeSample([1, -65535, 0], [2])); // occupies [1, −65535, −2]
+      // The ray's cells [0, 65537, z] alias [1, −65535, z] — without the guard
+      // this "hits" and reports a bogus far-away center.
+      expect(grid.raycast([0, 65537, 3], [0, 65537, -20])).toBeNull();
+    });
+
+    it('an out-of-envelope camera cell does not carve aliased in-range cells', () => {
+      const grid = new OccupancyGrid({ cellSizeM: 1 });
+      // Occupy [1, −65535, −5] (in range; the alias target of [0, 65537, −5]).
+      grid.addSample(makeSample([1, -65535, 0], [5]));
+      expect(grid.getCellPoint([1, -65535, -5])).not.toBeNull();
+      // A camera ~65 540 cells up, looking straight DOWN (−Z rotated onto −Y),
+      // observing a point 10 cells below: the carve walk from the
+      // out-of-envelope camera cell [0, 65540, −5] passes [0, 65537, −5], whose
+      // packed key aliases [1, −65535, −5] — an unguarded carve deletes it.
+      const downLooking: DepthSample = {
+        timestamp: 0,
+        cameraPos: [0, 65540, -5],
+        cameraRot: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2],
+        points: [{ screenX: 0.5, screenY: 0.5, depthM: 10 }],
+        projectionMatrix: PROJECTION,
+      };
+      grid.addSample(downLooking);
+      // The unrelated in-range cell must survive the far sample.
+      expect(grid.getCellPoint([1, -65535, -5])).not.toBeNull();
+    });
+  });
+
   describe('clear', () => {
     it('empties the grid', () => {
       const grid = new OccupancyGrid({ cellSizeM: 1 });
