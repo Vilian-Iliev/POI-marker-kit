@@ -412,4 +412,74 @@ describe('OccupancyGrid', () => {
       expect(grid.getRevision()).toBe(r + 1);
     });
   });
+
+  describe('getOccupiedCells snapshot memoization (Step 1.2, 2026-07-03 fps plan)', () => {
+    // Why these tests matter: with cubes + occluder both on, every throttled
+    // refresh triggers TWO identical full-grid walks with the same
+    // minConfidence floor. Memoizing the last (revision, minObservations) →
+    // array halves that scan+alloc cost with zero interface churn — but the
+    // cache must never serve a stale set after a mutation, and must not be
+    // used for floors the revision counter does not track (> 10).
+
+    it('returns the identical array for a repeated same-floor call on an unchanged grid', () => {
+      const grid = new OccupancyGrid();
+      grid.addSample(makeSample([0, 0, 0], [5.3, 4.2]));
+      const first = grid.getOccupiedCells(1);
+      const second = grid.getOccupiedCells(1);
+      expect(second).toBe(first); // same instance — the second walk was skipped
+    });
+
+    it('does not serve the cache across different minObservations floors', () => {
+      const grid = new OccupancyGrid();
+      grid.addSample(makeSample([0, 0, 0], [5.3]));
+      grid.addSample(makeSample([0, 0, 0], [5.3]));
+      const atOne = grid.getOccupiedCells(1);
+      const atTwo = grid.getOccupiedCells(2);
+      expect(atTwo).not.toBe(atOne);
+      expect(atOne).toHaveLength(1);
+      expect(atTwo).toHaveLength(1); // the cell has 2 observations
+      expect(grid.getOccupiedCells(3)).toHaveLength(0);
+    });
+
+    it('invalidates on every occupied-set mutation (add, carve, clear)', () => {
+      const grid = new OccupancyGrid();
+      grid.addSample(makeSample([0, 0, 0], [5.3]));
+      const first = grid.getOccupiedCells(1);
+      expect(first).toHaveLength(1);
+
+      // Add: a new endpoint cell must appear.
+      grid.addSample(makeSample([0, 0, 0], [2.0]));
+      const afterAdd = grid.getOccupiedCells(1);
+      expect(afterAdd).not.toBe(first);
+      expect(afterAdd).toHaveLength(2);
+
+      // Carve: a deeper ray through the 2 m cell deletes it (carve runs
+      // before increment, and the endpoint protection only covers the new
+      // endpoint) — the snapshot must reflect the removal.
+      grid.addSample(makeSample([0, 0, 0], [8.0]));
+      const afterCarve = grid.getOccupiedCells(1);
+      expect(afterCarve).not.toBe(afterAdd);
+
+      // Clear: empty snapshot.
+      grid.clear();
+      expect(grid.getOccupiedCells(1)).toHaveLength(0);
+    });
+
+    it('does not memoize floors above the revision-tracked maximum (10)', () => {
+      // Once a cell's count passes 10, further observations no longer bump
+      // the revision — so a floor > 10 keyed on the revision could go stale.
+      // Such floors are simply never cached.
+      const grid = new OccupancyGrid();
+      for (let i = 0; i < 11; i++) {
+        grid.addSample(makeSample([0, 0, 0], [5.3]));
+      }
+      // Count is 11 < 12: not occupied at floor 12.
+      expect(grid.getOccupiedCells(12)).toHaveLength(0);
+      // One more settled observation (no revision bump) pushes count to 12.
+      grid.addSample(makeSample([0, 0, 0], [5.3]));
+      // A revision-keyed cache would still say "empty"; the uncached walk
+      // must see the crossing.
+      expect(grid.getOccupiedCells(12)).toHaveLength(1);
+    });
+  });
 });

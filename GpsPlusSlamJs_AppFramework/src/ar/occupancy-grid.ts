@@ -83,6 +83,19 @@ export class OccupancyGrid {
    * session (see `2026-06-30-occluder-tuning-followups.md`).
    */
   private revision = 0;
+  /**
+   * Memo of the last {@link getOccupiedCells} walk (Step 1.2 of the
+   * 2026-07-03 long-session fps plan): with cubes + occluder both on, every
+   * throttled refresh triggers two identical full-grid walks with the same
+   * minConfidence floor — the second is answered from here. Valid only while
+   * `revision` is unchanged, so it is only used for floors the revision
+   * counter actually tracks (≤ {@link MAX_RELEVANT_COUNT}).
+   */
+  private snapshotCache: {
+    revision: number;
+    minObservations: number;
+    cells: GridCell[];
+  } | null = null;
 
   constructor(options?: OccupancyGridOptions) {
     const cellSizeM = options?.cellSizeM ?? 0.15;
@@ -178,13 +191,36 @@ export class OccupancyGrid {
     return endpoints.length;
   }
 
-  /** Occupied cells observed at least `minObservations` times (default 1). */
+  /**
+   * Occupied cells observed at least `minObservations` times (default 1).
+   *
+   * The result is a **shared immutable snapshot**: a repeated call with the
+   * same floor on an unchanged grid returns the SAME array instance (the
+   * memo above), so callers must never mutate it. Floors above
+   * {@link MAX_RELEVANT_COUNT} bypass the memo — the revision counter does
+   * not track their threshold crossings, so a cached result could go stale.
+   */
   getOccupiedCells(minObservations = 1): GridCell[] {
+    const cache = this.snapshotCache;
+    if (
+      cache &&
+      cache.revision === this.revision &&
+      cache.minObservations === minObservations
+    ) {
+      return cache.cells;
+    }
     const result: GridCell[] = [];
     for (const record of this.cells.values()) {
       if (record.count >= minObservations) {
         result.push(record.cell);
       }
+    }
+    if (minObservations <= MAX_RELEVANT_COUNT) {
+      this.snapshotCache = {
+        revision: this.revision,
+        minObservations,
+        cells: result,
+      };
     }
     return result;
   }
