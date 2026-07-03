@@ -37,18 +37,29 @@ export interface OccupancyGridOptions {
   readonly carveStopCells?: number;
 }
 
+/**
+ * Per-cell state, deliberately FLAT (Step 3.1 of the 2026-07-03 long-session
+ * fps plan): one plain object with eight scalar fields instead of the former
+ * `{ cell, posSum: [..], colorSum: [..] }` shape (~5 heap objects per cell,
+ * ~201 B/cell measured in the 2026-06-30 Round 5). The cell coordinates are
+ * NOT stored — `cellKey` is bijective, so every tuple a public API returns is
+ * recovered via {@link unpackCellKey}. At ~100k cells after a 5-minute walk
+ * this roughly halves the grid's long-lived heap and, more importantly, the
+ * old-generation GC mark workload that reads as creeping jank.
+ */
 interface CellRecord {
-  readonly cell: GridCell;
   /** Number of depth points observed in this cell. */
   count: number;
   /**
-   * Per-axis sum of the EXACT unprojected points (raw WebXR) observed in this
-   * cell. `posSum / count` is the running-average surface point — what the
+   * Per-axis sums of the EXACT unprojected points (raw WebXR) observed in
+   * this cell. `sum / count` is the running-average surface point — what the
    * COLMAP export and the debug cubes draw, instead of the 15 cm-lattice
-   * `getCellCenter` (COLMAP export follow-up, Item A). Every observation has a
-   * position, so the divisor is `count` (unlike `colorSum`/`colorCount`).
+   * `getCellCenter` (COLMAP export follow-up, Item A). Every observation has
+   * a position, so the divisor is `count` (unlike the color sums).
    */
-  posSum: [number, number, number];
+  posSumX: number;
+  posSumY: number;
+  posSumZ: number;
   /**
    * Number of observations that carried a color (≤ count — color-less
    * observations from old recordings or with the rgb option off must not
@@ -56,7 +67,9 @@ interface CellRecord {
    */
   colorCount: number;
   /** Per-channel sums of the colored observations (running average). */
-  colorSum: [number, number, number];
+  colorSumR: number;
+  colorSumG: number;
+  colorSumB: number;
 }
 
 /**
@@ -182,6 +195,16 @@ export class OccupancyGrid {
     const cameraCell = this.cellForPosition(sample.cameraPos);
     // Pass 1: carve free space along every ray, collecting endpoint cells
     // (with the observing point's color, if any — Iter 8).
+    //
+    // Carve dedupe (Step 3.2 of the 2026-07-03 fps plan): many of a sample's
+    // ≤1024 points quantize to the SAME endpoint cell (adjacent depth pixels
+    // a few metres out share a 15 cm voxel), and the carve is a pure function
+    // of (cameraCell, endpointCell) — within one sample, repeating it is an
+    // exact no-op (all carving happens before any increment, and deleting an
+    // already-deleted key changes nothing, not even the revision). Carving
+    // once per UNIQUE endpoint cell is therefore byte-identical grid state at
+    // a fraction of the bresenham+Map work (~2–5× at gridSize 32).
+    const carvedEndpointKeys = new Set<number>();
     const endpoints: Array<{ cell: GridCell; world: Vector3; rgb?: RgbTuple }> =
       [];
     for (const point of sample.points) {
@@ -197,7 +220,11 @@ export class OccupancyGrid {
         continue;
       }
       if (!cellsEqual(cameraCell, cell)) {
-        this.carve(cameraCell, cell);
+        const key = cellKey(cell);
+        if (!carvedEndpointKeys.has(key)) {
+          carvedEndpointKeys.add(key);
+          this.carve(cameraCell, cell);
+        }
       }
       endpoints.push({ cell, world, rgb: point.rgb });
     }
@@ -227,9 +254,9 @@ export class OccupancyGrid {
       return cache.cells;
     }
     const result: GridCell[] = [];
-    for (const record of this.cells.values()) {
+    for (const [key, record] of this.cells) {
       if (record.count >= minObservations) {
-        result.push(record.cell);
+        result.push(unpackCellKey(key));
       }
     }
     if (minObservations <= MAX_RELEVANT_COUNT) {
@@ -274,14 +301,14 @@ export class OccupancyGrid {
     }
     // Cold path: one Map walk into a worst-case-sized buffer, trimmed at the
     // end (a slice copy of the used prefix beats a second counting walk).
+    // Coordinates come straight from the key — no tuple intermediate at all.
     const flat = new Int32Array(this.cells.size * 3);
     let used = 0;
-    for (const record of this.cells.values()) {
+    for (const [key, record] of this.cells) {
       if (record.count >= minObservations) {
-        const c = record.cell;
-        flat[used] = c[0];
-        flat[used + 1] = c[1];
-        flat[used + 2] = c[2];
+        flat[used] = unpackCellCoord(key, 0);
+        flat[used + 1] = unpackCellCoord(key, 1);
+        flat[used + 2] = unpackCellCoord(key, 2);
         used += 3;
       }
     }
@@ -313,8 +340,8 @@ export class OccupancyGrid {
       centerPos,
       radiusM,
       minObservations,
-      (record) => {
-        result.push(record.cell);
+      (x, y, z) => {
+        result.push([x, y, z]);
       }
     );
     return result;
@@ -335,8 +362,8 @@ export class OccupancyGrid {
       centerPos,
       radiusM,
       minObservations,
-      (record) => {
-        coords.push(record.cell[0], record.cell[1], record.cell[2]);
+      (x, y, z) => {
+        coords.push(x, y, z);
       }
     );
     return Int32Array.from(coords);
@@ -357,7 +384,7 @@ export class OccupancyGrid {
     centerPos: Vector3,
     radiusM: number,
     minObservations: number,
-    visit: (record: CellRecord) => void
+    visit: (x: number, y: number, z: number) => void
   ): void {
     if (!Number.isFinite(radiusM) || radiusM <= 0) {
       throw new RangeError(
@@ -407,16 +434,18 @@ export class OccupancyGrid {
         if (!record || record.count < minObservations) {
           continue;
         }
+        const x = unpackCellCoord(key, 0);
+        const y = unpackCellCoord(key, 1);
+        const z = unpackCellCoord(key, 2);
         if (!wholeInside) {
-          const c = record.cell;
-          const dx = c[0] * cs - centerPos[0];
-          const dy = c[1] * cs - centerPos[1];
-          const dz = c[2] * cs - centerPos[2];
+          const dx = x * cs - centerPos[0];
+          const dy = y * cs - centerPos[1];
+          const dz = z * cs - centerPos[2];
           if (dx * dx + dy * dy + dz * dz > r2) {
             continue;
           }
         }
-        visit(record);
+        visit(x, y, z);
       }
     }
   }
@@ -455,9 +484,9 @@ export class OccupancyGrid {
       return null;
     }
     return [
-      record.posSum[0] / record.count,
-      record.posSum[1] / record.count,
-      record.posSum[2] / record.count,
+      record.posSumX / record.count,
+      record.posSumY / record.count,
+      record.posSumZ / record.count,
     ];
   }
 
@@ -475,9 +504,9 @@ export class OccupancyGrid {
     const average = (sum: number): number =>
       Math.min(255, Math.max(0, Math.round(sum / record.colorCount)));
     return [
-      average(record.colorSum[0]),
-      average(record.colorSum[1]),
-      average(record.colorSum[2]),
+      average(record.colorSumR),
+      average(record.colorSumG),
+      average(record.colorSumB),
     ];
   }
 
@@ -591,11 +620,14 @@ export class OccupancyGrid {
     let record = this.cells.get(key);
     if (!record) {
       record = {
-        cell,
         count: 0,
-        posSum: [0, 0, 0],
+        posSumX: 0,
+        posSumY: 0,
+        posSumZ: 0,
         colorCount: 0,
-        colorSum: [0, 0, 0],
+        colorSumR: 0,
+        colorSumG: 0,
+        colorSumB: 0,
       };
       this.cells.set(key, record);
       this.indexCell(cell, key);
@@ -617,16 +649,16 @@ export class OccupancyGrid {
     }
     // Every observation carries a finite position (the unprojector guarantees
     // it), so it always feeds the running-average surface point.
-    record.posSum[0] += world[0];
-    record.posSum[1] += world[1];
-    record.posSum[2] += world[2];
+    record.posSumX += world[0];
+    record.posSumY += world[1];
+    record.posSumZ += world[2];
     // Only finite triples enter the average — bad persisted data degrades
     // to a color-less observation instead of poisoning the cell.
     if (rgb && isFiniteTriple(rgb)) {
       record.colorCount++;
-      record.colorSum[0] += rgb[0];
-      record.colorSum[1] += rgb[1];
-      record.colorSum[2] += rgb[2];
+      record.colorSumR += rgb[0];
+      record.colorSumG += rgb[1];
+      record.colorSumB += rgb[2];
     }
   }
 }
@@ -651,12 +683,41 @@ function cellInKeyRange(cell: GridCell): boolean {
   );
 }
 
-function cellKey(cell: GridCell): number {
+/**
+ * Pack a cell into the numeric Map key. Exported (Step 3.1 of the 2026-07-03
+ * fps plan) together with {@link unpackCellKey} — the pair is property-tested
+ * as exact inverses over the full ±65 535 envelope (pr145 §1).
+ */
+export function cellKey(cell: GridCell): number {
   return (
     (cell[0] + KEY_OFFSET) * KEY_FIELD_SQ +
     (cell[1] + KEY_OFFSET) * KEY_FIELD +
     (cell[2] + KEY_OFFSET)
   );
+}
+
+/** One axis of {@link unpackCellKey} without allocating the tuple (hot paths). */
+function unpackCellCoord(key: number, axis: 0 | 1 | 2): number {
+  if (axis === 0) {
+    return Math.floor(key / KEY_FIELD_SQ) - KEY_OFFSET;
+  }
+  if (axis === 1) {
+    return (Math.floor(key / KEY_FIELD) % KEY_FIELD) - KEY_OFFSET;
+  }
+  return (key % KEY_FIELD) - KEY_OFFSET;
+}
+
+/**
+ * Exact inverse of {@link cellKey}. Since Step 3.1 the per-cell records no
+ * longer store their coordinate tuple — every tuple a public API returns is
+ * recovered from the key through this function.
+ */
+export function unpackCellKey(key: number): GridCell {
+  return [
+    unpackCellCoord(key, 0),
+    unpackCellCoord(key, 1),
+    unpackCellCoord(key, 2),
+  ];
 }
 
 // --- Chunk index (Step 2 of the 2026-07-03 long-session fps plan) ---

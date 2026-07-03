@@ -16,7 +16,7 @@ import * as fc from 'fast-check';
 import { mat4 } from 'gl-matrix';
 import type { Matrix4, Vector3 } from 'gps-plus-slam-js';
 import type { DepthSample } from '../types/ar-types';
-import { OccupancyGrid } from './occupancy-grid';
+import { OccupancyGrid, cellKey, unpackCellKey } from './occupancy-grid';
 
 const PROJECTION: Matrix4 = Array.from(
   mat4.perspective(mat4.create(), Math.PI / 3, 16 / 9, 0.1, 1000)
@@ -268,6 +268,63 @@ describe('OccupancyGrid properties', () => {
           ).toEqual(actual.flat());
         }
       )
+    );
+  });
+
+  it('duplicating points within one sample scales counts but never changes the occupied set (Step 3.2 carve-dedupe contract)', () => {
+    // Why this property matters: Step 3.2 carves once per UNIQUE endpoint
+    // cell instead of once per point — legal only because a repeated carve
+    // within one sample is an exact no-op (carve-before-increment). This
+    // pins the observable contract that makes the dedupe byte-identical:
+    // repeating every point k times must (a) leave the occupied SET
+    // identical and (b) multiply every cell's observation count by exactly
+    // k — a dedupe bug that skipped increments or mis-keyed a carve breaks
+    // one of the two.
+    fc.assert(
+      fc.property(
+        fc.array(fc.double({ min: 0.6, max: 20, noNaN: true }), {
+          minLength: 1,
+          maxLength: 6,
+        }),
+        fc.integer({ min: 2, max: 4 }),
+        (depths, k) => {
+          const single = new OccupancyGrid({ cellSizeM: 1 });
+          single.addSample(makeSample([0, 0, 0], depths));
+
+          const duplicated = new OccupancyGrid({ cellSizeM: 1 });
+          const repeated: number[] = [];
+          for (let i = 0; i < k; i++) repeated.push(...depths);
+          duplicated.addSample(makeSample([0, 0, 0], repeated));
+
+          const key = (c: readonly number[]): string => c.join(',');
+          const singleSet = new Set(single.getOccupiedCells().map(key));
+          expect(new Set(duplicated.getOccupiedCells().map(key))).toEqual(
+            singleSet
+          );
+          // Count scaling: a cell observed n times in `single` is observed
+          // exactly k·n times in `duplicated`.
+          for (let n = 1; n <= depths.length; n++) {
+            expect(
+              new Set(duplicated.getOccupiedCells(k * n).map(key))
+            ).toEqual(new Set(single.getOccupiedCells(n).map(key)));
+          }
+        }
+      )
+    );
+  });
+
+  it('unpackCellKey is the exact inverse of cellKey over the full packable envelope (Step 3.1)', () => {
+    // Why this property matters: Step 3.1 drops the stored per-record cell
+    // tuple — every tuple the public APIs return is now recovered by
+    // unpacking the Map key. A single bit of drift in the inverse would
+    // silently corrupt every consumer (cubes, occluder, COLMAP export), so
+    // the round-trip is pinned across the whole ±65 535 range the pr145 §1
+    // envelope allows (|coord| ≤ CELL_KEY_LIMIT).
+    const coord = fc.integer({ min: -65535, max: 65535 });
+    fc.assert(
+      fc.property(coord, coord, coord, (x, y, z) => {
+        expect(unpackCellKey(cellKey([x, y, z]))).toEqual([x, y, z]);
+      })
     );
   });
 });
