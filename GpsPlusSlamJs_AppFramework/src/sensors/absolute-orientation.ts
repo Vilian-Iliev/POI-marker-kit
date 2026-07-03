@@ -132,9 +132,21 @@ export async function startAbsoluteOrientationWatch(
   stopAbsoluteOrientationWatch();
   const myGeneration = watchGeneration;
 
+  // `onStatus` is caller-supplied; an unguarded throw from it would reject
+  // this promise (or surface as an uncaught error from the sensor event
+  // listeners), breaking the documented "Never throws" contract. Isolate it —
+  // a broken consumer status handler must not take the watch down (PR #124).
+  const reportStatus = (status: AbsoluteOrientationStatus): void => {
+    try {
+      onStatus(status);
+    } catch (err) {
+      log.error('onStatus callback threw; continuing', err);
+    }
+  };
+
   const Ctor = getSensorCtor();
   if (!isAbsoluteOrientationAvailable() || Ctor === null) {
-    onStatus({
+    reportStatus({
       state: 'unavailable',
       reason: 'no AbsoluteOrientationSensor / insecure context',
     });
@@ -144,7 +156,10 @@ export async function startAbsoluteOrientationWatch(
   try {
     // All three underlying sensors must be granted-or-promptable (plan §5.1).
     if (!(await sensorPermissionsUsable())) {
-      onStatus({ state: 'unavailable', reason: 'sensor permission denied' });
+      reportStatus({
+        state: 'unavailable',
+        reason: 'sensor permission denied',
+      });
       return;
     }
 
@@ -192,7 +207,7 @@ export async function startAbsoluteOrientationWatch(
     created.addEventListener('activate', () => {
       if (created !== sensor) return;
       log.info('active');
-      onStatus({ state: 'active' });
+      reportStatus({ state: 'active' });
     });
     created.addEventListener('error', (event?: unknown) => {
       if (created !== sensor) return;
@@ -200,7 +215,7 @@ export async function startAbsoluteOrientationWatch(
       const reason =
         (event as SensorErrorLike | undefined)?.error?.name ?? 'SensorError';
       log.error('sensor error:', reason);
-      onStatus({ state: 'error', reason });
+      reportStatus({ state: 'error', reason });
     });
 
     created.start();
@@ -208,7 +223,7 @@ export async function startAbsoluteOrientationWatch(
     sensor = null;
     latest = null;
     const reason = (err as Error)?.name ?? String(err);
-    onStatus({ state: 'error', reason });
+    reportStatus({ state: 'error', reason });
   }
 }
 

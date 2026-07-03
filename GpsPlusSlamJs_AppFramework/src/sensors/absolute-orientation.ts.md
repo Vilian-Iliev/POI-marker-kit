@@ -18,7 +18,9 @@ behaviour change. See
   in the raw `'device'` frame at 20 Hz, and caches each `reading`. Surfaces
   lifecycle via `onStatus({state:'active'|'unavailable'|'error', reason?})`.
   **Never throws** — denied permission / missing API / constructor failure all
-  resolve to a reported no-op.
+  resolve to a reported no-op, and a **throwing `onStatus` callback is isolated
+  too** (logged, watch continues — PR #124 review, pinned by the never-throws
+  test).
 - `getLatestAbsoluteOrientation(): AbsoluteOrientationReading | null` — latest
   cached reading, snapshotted into the GPS event payload (mirrors
   `getLastDeviceOrientation`). `null` until the first reading / when unavailable.

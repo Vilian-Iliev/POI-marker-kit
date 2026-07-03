@@ -32,7 +32,10 @@
     only when `sharpness < blurRelativeThreshold · median(recentNonBlack)`.
   - **Cold start accepts.** Before `minSamples` non-black frames exist there is no
     baseline, so every non-black frame is accepted — same "no data ⇒ don't block"
-    rule as the motion gate's empty window.
+    rule as the motion gate's empty window. `minSamples` is **clamped to
+    `historySize`** in the constructor (PR #124/#127 review): the rolling window
+    never grows past `historySize`, so an unclamped larger `minSamples` could
+    never be reached and the blur check would silently never arm.
   - **A black frame never pollutes the baseline.** Its ~0 sharpness is NOT
     recorded; otherwise it would drag the median down and disarm the blur check.
   - A non-black frame's sharpness (accepted OR blurry-rejected) IS recorded, so a

@@ -111,6 +111,21 @@ describe('AbsoluteOrientationSensor capture', () => {
       );
       expect(getLatestAbsoluteOrientation()).toBeNull();
     });
+
+    it('honours the documented never-throws contract even when the onStatus callback itself throws', async () => {
+      // Why this test matters (PR #124 review): startAbsoluteOrientationWatch
+      // documents "Never throws", but onStatus is caller-supplied — an
+      // unguarded throw from it rejected the start promise (and would surface
+      // as an uncaught error from the sensor event listeners). The status
+      // reporter must isolate the consumer callback.
+      delete (window as unknown as Record<string, unknown>)
+        .AbsoluteOrientationSensor;
+      await expect(
+        startAbsoluteOrientationWatch(() => {
+          throw new Error('consumer status handler boom');
+        })
+      ).resolves.toBeUndefined();
+    });
   });
 
   describe('capture', () => {
