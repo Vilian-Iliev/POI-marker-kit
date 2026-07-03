@@ -69,10 +69,15 @@ function styleNeedsNormals(style: OccluderDebugStyle): boolean {
  * pin the same numbers the shader bakes in.
  */
 export const OCCLUDER_DEPTH_SHADE = {
-  /** Distance (m) where the fade starts — nearer stays full-bright cyan. */
-  FADE_START_M: 1.5,
-  /** Distance (m) where the fade bottoms out at {@link FADE_MIN_BRIGHTNESS}. */
-  FADE_END_M: 10,
+  /** Distance (m) where the fade starts — nearer stays full-bright cyan.
+   *  Indoor-scale since the 2026-07-03 field pass (finding F1): the original
+   *  1.5 → 10 m range kept a whole room in the "near" band (94% brightness at
+   *  3 m), making depth-shaded indistinguishable from matcap on device. */
+  FADE_START_M: 0.75,
+  /** Distance (m) where the fade bottoms out at {@link FADE_MIN_BRIGHTNESS}.
+   *  ~Room depth, so indoor scenes span the full near→far gradient; beyond it
+   *  everything sits uniformly at the floor (still separated from near). */
+  FADE_END_M: 4.5,
   /** Brightness floor far away — never fades to black, so distant mesh stays
    *  inspectable (the reason the fog-to-background idea was rejected). */
   FADE_MIN_BRIGHTNESS: 0.3,

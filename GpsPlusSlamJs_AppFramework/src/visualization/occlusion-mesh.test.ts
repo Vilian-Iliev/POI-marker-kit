@@ -470,6 +470,23 @@ describe('OcclusionMesh', () => {
       expect(mid).toBeLessThan(1);
     });
 
+    it('fade mirror: perceptibility pins for indoor rooms (field finding F1)', () => {
+      // Why this test matters: the first field pass (2026-07-03) proved the
+      // original constants (fade 1.5 → 10 m) made depth-shaded visually
+      // identical to matcap in a normal room — fade was still at 94%
+      // brightness at 3 m, so the whole room sat in the "near" band (see
+      // 2026-07-02-occluder-debug-viz-styles-followups.md §F1). These pins are
+      // the executable form of "must be visibly darker across a room": the
+      // fade must engage within arm's reach, bottom out by ~5 m so indoor
+      // scenes span the full near→far gradient, and a wall ~3 m away must
+      // have lost at least 40% brightness. A future retune that regresses
+      // depth-shaded back to matcap-indistinguishable-indoors fails here
+      // instead of resurfacing on device.
+      expect(OCCLUDER_DEPTH_SHADE.FADE_START_M).toBeLessThanOrEqual(1);
+      expect(OCCLUDER_DEPTH_SHADE.FADE_END_M).toBeLessThanOrEqual(5);
+      expect(occluderDepthFade(3)).toBeLessThanOrEqual(0.6);
+    });
+
     it('rim mirror: 0 head-on, RIM_STRENGTH at grazing', () => {
       const { RIM_STRENGTH } = OCCLUDER_DEPTH_SHADE;
       expect(occluderFresnelRim(1)).toBe(0); // facing the camera
