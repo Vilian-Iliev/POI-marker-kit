@@ -33,9 +33,11 @@ thin `createRecorderStore` that calls this factory with its own extras.
 - `licenseKey` defaults to the bundled `COMMUNITY_LICENSE_KEY`. Validation
   always runs (`validateLicenseKey`) and throws on invalid / expired / empty
   keys; there is no bypass.
-- `extraReducers` keys must not collide with the built-in slice keys
-  (`gpsData`, `gpsElements`, `arElements`, `recorder`). RTK overwrites the
-  built-in if a collision occurs — callers are responsible for avoiding it.
+- `extraReducers` keys must not collide with the framework-reserved slice keys
+  (`gpsData`, `gpsElements`, `arElements`, `recording`, `tracking`,
+  `trackingQuality`). The factory **throws at construction** naming every
+  colliding key (2026-07-04, PR #17 review) — previously the spread silently
+  replaced the built-in reducer, corrupting framework state with no diagnostic.
 - `extraMiddleware` is appended **after** the persistence middleware, so
   consumer middleware sees actions that have already been persisted.
 - **Persisted-action whitelist is slice-derived, not literal.** The factory

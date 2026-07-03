@@ -65,6 +65,43 @@ describe('createSlamAppStore', () => {
     });
   });
 
+  describe('extraReducers boundary validation (PR #17 review)', () => {
+    it('throws a clear error when an extraReducers key collides with a framework-reserved slice', () => {
+      // Why this test matters: extraReducers is spread AFTER the built-ins, so
+      // a colliding key (mistake or name clash) silently REPLACED a framework
+      // reducer — corrupting e.g. GPS state with no diagnostic. The factory is
+      // a public boundary; bad input must fail loudly at construction.
+      expect(() =>
+        createSlamAppStore({
+          storageBackend: backend,
+          extraReducers: { gpsData: () => null },
+        })
+      ).toThrow(/gpsData/);
+    });
+
+    it('names every colliding key, not just the first', () => {
+      expect(() =>
+        createSlamAppStore({
+          storageBackend: backend,
+          extraReducers: {
+            recording: () => ({}),
+            trackingQuality: () => ({}),
+          },
+        })
+      ).toThrow(/recording.*trackingQuality|trackingQuality.*recording/);
+    });
+
+    it('still accepts non-colliding extraReducers unchanged', () => {
+      const store = createSlamAppStore({
+        storageBackend: backend,
+        extraReducers: { myAppSlice: () => 'ok' },
+      });
+      expect(
+        (store.getState() as unknown as { myAppSlice: string }).myAppSlice
+      ).toBe('ok');
+    });
+  });
+
   describe('enableCompassColdStartOverride (Stage-0, default-on feature)', () => {
     it('enables the override once gpsData exists (after the first setZeroPos)', async () => {
       // Why: the flag lives on the gpsData slice, which is null until the first

@@ -248,13 +248,32 @@ export function createSlamAppStore<
 
   validateLicenseKey(licenseKey);
 
-  const reducer = {
+  // Boundary validation: `extraReducers` is spread AFTER the built-ins, so a
+  // colliding key would silently REPLACE a framework reducer (e.g. a custom
+  // `gpsData` corrupting GPS state with no diagnostic). Fail loudly instead,
+  // naming every offending key (PR #17 review).
+  const builtins = {
     gpsData: gpsDataReducer,
     gpsElements: gpsElementsReducer,
     arElements: arElementsReducer,
     recording: recordingReducer,
     tracking: trackingReducer,
     trackingQuality: trackingQualityReducer,
+  };
+  if (extraReducers) {
+    const collisions = Object.keys(extraReducers).filter((key) =>
+      Object.prototype.hasOwnProperty.call(builtins, key)
+    );
+    if (collisions.length > 0) {
+      throw new Error(
+        `extraReducers must not overwrite framework-reserved slice(s): ` +
+          `${collisions.join(', ')}. Reserved keys: ${Object.keys(builtins).join(', ')}.`
+      );
+    }
+  }
+
+  const reducer = {
+    ...builtins,
     ...(extraReducers ?? ({} as ExtraReducers)),
   };
 
