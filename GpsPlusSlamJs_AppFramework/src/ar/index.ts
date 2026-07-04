@@ -234,6 +234,14 @@ export { bresenham3d, type GridCell } from './bresenham3d.js';
 // --- occupancy-grid ---
 export { OccupancyGrid, type OccupancyGridOptions } from './occupancy-grid.js';
 
+// --- occupancy-mesher (sparse voxel Set → face-culled surface + AABB list) ---
+export {
+  type Aabb,
+  type OccupancyMeshResult,
+  type MeshOccupiedCellsOptions,
+  meshOccupiedCells,
+} from './occupancy-mesher.js';
+
 // --- frame-loop ---
 export { type FrameUpdate, registerFrameUpdate } from './frame-loop.js';
 
@@ -302,6 +310,8 @@ export { SCENE_NODE } from './scene-node-names.js';
 export {
   initAR,
   endARSession,
+  setSessionEndCallback,
+  type SessionEndInfo,
   setImageCaptureCallback,
   setImageQualityAnalyzer,
   startImageCapture,
@@ -325,6 +335,7 @@ export {
   getArWorldGroup,
   getCamera,
   getCurrentArPose,
+  getDepthInfoFromFrame,
   type SessionFeatureOptions,
 } from './webxr-session.js';
 

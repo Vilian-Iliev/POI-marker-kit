@@ -837,11 +837,11 @@ export function hideRecordingControls(): void {
  * Enable/disable the Enter AR button based on form validity.
  * Also updates the hint text to guide users on what action is needed.
  *
- * Requirements (Issue 1a-fix):
- * 1. Permissions must be ready (camera, location)
- * 2. Folder must be selected (for reading previous recordings)
- * 3. Save location must be chosen (for writing new recording)
- * 4. A scenario must be selected or new scenario name entered
+ * Requirements (Issue 1a-fix; folder requirement dropped per the 2026-06-05
+ * setup-UX decision D5 — the read folder is an optional import/recovery step):
+ * 1. Save location must be chosen (for writing new recording)
+ * 2. Permissions must be ready (camera, location)
+ * 3. A scenario must be selected or new scenario name entered
  */
 export function validateEnterButton(): void {
   if (!cachedElements) {
@@ -1184,7 +1184,10 @@ export function setFolderImportExpanded(
   }
   const hintEl = document.getElementById('folder-import-hint');
   if (hintEl) {
-    if (hint && hint.trim()) {
+    // The hint explains WHY the section auto-expanded, so it is gated on
+    // `expanded` — a hint under a collapsed section would be inconsistent
+    // state (PR #63 review).
+    if (expanded && hint && hint.trim()) {
       hintEl.textContent = hint;
       hintEl.classList.remove('hidden');
     } else {

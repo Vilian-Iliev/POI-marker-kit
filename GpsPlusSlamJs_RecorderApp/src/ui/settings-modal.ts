@@ -18,6 +18,8 @@ import {
   FRAME_TILE_DISPLAY_CONSTRAINTS,
   QR_CONSTRAINTS,
   type RecordingOptions,
+  type OccluderMeshMode,
+  type OccluderDebugStyle,
 } from 'gps-plus-slam-app-framework/state/recording-options';
 import { createLogger } from 'gps-plus-slam-app-framework/utils/logger';
 import { getBuildInfo } from '../utils/build-info';
@@ -72,12 +74,22 @@ let occupancyCellSizeSlider: HTMLInputElement | null = null;
 let occupancyCellSizeValue: HTMLElement | null = null;
 let occupancyMinConfidenceSlider: HTMLInputElement | null = null;
 let occupancyMinConfidenceValue: HTMLElement | null = null;
+let occupancyLiveOcclusionCheckbox: HTMLInputElement | null = null;
+let occupancyPersistentOcclusionCheckbox: HTMLInputElement | null = null;
+let occupancyOccluderDebugStyleSelect: HTMLSelectElement | null = null;
+let occupancyOccluderMeshModeSelect: HTMLSelectElement | null = null;
+let occupancyOccluderRadiusSlider: HTMLInputElement | null = null;
+let occupancyOccluderRadiusValue: HTMLElement | null = null;
 let frameTileDisplayDivisorSlider: HTMLInputElement | null = null;
 let frameTileDisplayDivisorValue: HTMLElement | null = null;
+let frameTileMaxTilesSlider: HTMLInputElement | null = null;
+let frameTileMaxTilesValue: HTMLElement | null = null;
 let vizFrameTilesCheckbox: HTMLInputElement | null = null;
 let vizOccupancyCubesCheckbox: HTMLInputElement | null = null;
 let vizGpsAlignmentMarkersCheckbox: HTMLInputElement | null = null;
 let vizCompassCubesCheckbox: HTMLInputElement | null = null;
+let vizHeadingUpMapCheckbox: HTMLInputElement | null = null;
+let vizStatsOverlayCheckbox: HTMLInputElement | null = null;
 let compassColdStartOverrideCheckbox: HTMLInputElement | null = null;
 let compassRotationPriorCheckbox: HTMLInputElement | null = null;
 let compassWebXRConsistencyCheckbox: HTMLInputElement | null = null;
@@ -199,8 +211,32 @@ export function initSettingsModal(
   occupancyMinConfidenceSlider = document.getElementById(
     'occupancy-min-confidence'
   ) as HTMLInputElement;
+  occupancyLiveOcclusionCheckbox = document.getElementById(
+    'occupancy-live-occlusion'
+  ) as HTMLInputElement;
+  occupancyPersistentOcclusionCheckbox = document.getElementById(
+    'occupancy-persistent-occlusion'
+  ) as HTMLInputElement;
+  occupancyOccluderDebugStyleSelect = document.getElementById(
+    'occupancy-occluder-debug-style'
+  ) as HTMLSelectElement;
+  occupancyOccluderMeshModeSelect = document.getElementById(
+    'occupancy-occluder-mesh-mode'
+  ) as HTMLSelectElement;
+  occupancyOccluderRadiusSlider = document.getElementById(
+    'occupancy-occluder-radius'
+  ) as HTMLInputElement;
+  occupancyOccluderRadiusValue = document.getElementById(
+    'occupancy-occluder-radius-value'
+  );
   occupancyMinConfidenceValue = document.getElementById(
     'occupancy-min-confidence-value'
+  );
+  frameTileMaxTilesSlider = document.getElementById(
+    'frame-tile-max-tiles'
+  ) as HTMLInputElement;
+  frameTileMaxTilesValue = document.getElementById(
+    'frame-tile-max-tiles-value'
   );
   frameTileDisplayDivisorSlider = document.getElementById(
     'frame-tile-display-divisor'
@@ -219,6 +255,12 @@ export function initSettingsModal(
   ) as HTMLInputElement;
   vizCompassCubesCheckbox = document.getElementById(
     'viz-compass-cubes'
+  ) as HTMLInputElement;
+  vizHeadingUpMapCheckbox = document.getElementById(
+    'viz-heading-up-map'
+  ) as HTMLInputElement;
+  vizStatsOverlayCheckbox = document.getElementById(
+    'viz-stats-overlay'
   ) as HTMLInputElement;
   compassColdStartOverrideCheckbox = document.getElementById(
     'compass-cold-start-override'
@@ -327,6 +369,62 @@ export function initSettingsModal(
     }
   });
 
+  // Live CPU-depth occluder (occupancy.liveOcclusion). Live-AR only; applies on
+  // the next Enter-AR. Composes with the persistent mesh below (both can be on).
+  occupancyLiveOcclusionCheckbox?.addEventListener('change', () => {
+    if (workingOptions && occupancyLiveOcclusionCheckbox) {
+      workingOptions.occupancy.liveOcclusion =
+        occupancyLiveOcclusionCheckbox.checked;
+    }
+  });
+
+  // Persistent depth-only occlusion mesh (occupancy.persistentOcclusion).
+  // Applies on the next Enter-AR / replay load, like the voxel-size knobs.
+  occupancyPersistentOcclusionCheckbox?.addEventListener('change', () => {
+    if (workingOptions && occupancyPersistentOcclusionCheckbox) {
+      workingOptions.occupancy.persistentOcclusion =
+        occupancyPersistentOcclusionCheckbox.checked;
+    }
+  });
+
+  // Debug-visualization style of the persistent occluder mesh
+  // (occupancy.occluderDebugStyle): off / matcap / depth-shaded / wireframe /
+  // both. Only visible when the persistent occluder is on. Validated on save
+  // (unknown <option> values resolve to 'off'). Applies on the next Enter-AR /
+  // replay load.
+  occupancyOccluderDebugStyleSelect?.addEventListener('change', () => {
+    if (workingOptions && occupancyOccluderDebugStyleSelect) {
+      workingOptions.occupancy.occluderDebugStyle =
+        occupancyOccluderDebugStyleSelect.value as OccluderDebugStyle;
+    }
+  });
+
+  // Persistent-occluder mesher style (occupancy.occluderMeshMode): blocky cubes
+  // vs corner-fit cubes vs surface nets, so the surface-hugging meshers can be
+  // A/B-tested on-device. Validated on save; only one of OCCLUDER_MESH_MODES is
+  // accepted, so an unexpected <option> value still resolves to the default.
+  // Applies on the next Enter-AR / replay load.
+  occupancyOccluderMeshModeSelect?.addEventListener('change', () => {
+    if (workingOptions && occupancyOccluderMeshModeSelect) {
+      workingOptions.occupancy.occluderMeshMode =
+        occupancyOccluderMeshModeSelect.value as OccluderMeshMode;
+    }
+  });
+
+  // Camera-local occluder window (Step 2, 2026-07-03 long-session fps plan);
+  // 0 = unlimited. Applies on the next Enter-AR / replay load.
+  occupancyOccluderRadiusSlider?.addEventListener('input', () => {
+    if (
+      workingOptions &&
+      occupancyOccluderRadiusSlider &&
+      occupancyOccluderRadiusValue
+    ) {
+      const value = parseInt(occupancyOccluderRadiusSlider.value, 10);
+      workingOptions.occupancy.occluderRadiusM = value;
+      occupancyOccluderRadiusValue.textContent = formatOccluderRadius(value);
+    }
+  });
+
   // Voxel noise filter: minimum observations before a cell is rendered.
   // Integer count (occupancy.minConfidence); 1 = unfiltered.
   occupancyMinConfidenceSlider?.addEventListener('input', () => {
@@ -354,6 +452,16 @@ export function initSettingsModal(
       const value = parseInt(frameTileDisplayDivisorSlider.value, 10);
       workingOptions.frameTileDisplay.divisor = value;
       frameTileDisplayDivisorValue.textContent = formatResolutionDivisor(value);
+    }
+  });
+
+  // Live frame-tile FIFO cap (Step 4, 2026-07-03 long-session fps plan).
+  // Live-only: replay never applies it (full-path coverage auditing).
+  frameTileMaxTilesSlider?.addEventListener('input', () => {
+    if (workingOptions && frameTileMaxTilesSlider && frameTileMaxTilesValue) {
+      const value = parseInt(frameTileMaxTilesSlider.value, 10);
+      workingOptions.frameTileDisplay.maxTiles = value;
+      frameTileMaxTilesValue.textContent = formatMaxTiles(value);
     }
   });
 
@@ -492,6 +600,20 @@ export function initSettingsModal(
     }
   });
 
+  vizHeadingUpMapCheckbox?.addEventListener('change', () => {
+    if (workingOptions && vizHeadingUpMapCheckbox) {
+      workingOptions.visualization.headingUpMap =
+        vizHeadingUpMapCheckbox.checked;
+    }
+  });
+
+  vizStatsOverlayCheckbox?.addEventListener('change', () => {
+    if (workingOptions && vizStatsOverlayCheckbox) {
+      workingOptions.visualization.statsOverlay =
+        vizStatsOverlayCheckbox.checked;
+    }
+  });
+
   // Compass alignment debug toggles (Phase-4). Feed the absolute-orientation
   // compass into the live GPS alignment; applied on the next session/reload.
   compassColdStartOverrideCheckbox?.addEventListener('change', () => {
@@ -561,6 +683,16 @@ export function initSettingsModal(
  * Format the resolution divisor value for display.
  * 1 → "1× (full)", 2 → "÷2 (half)", 4 → "÷4 (quarter)", etc.
  */
+/** Label for the live frame-tile cap: 0 is the explicit "unlimited". */
+function formatMaxTiles(maxTiles: number): string {
+  return maxTiles === 0 ? 'unlimited' : String(maxTiles);
+}
+
+/** Label for the occluder window: 0 is the explicit "unlimited". */
+function formatOccluderRadius(radiusM: number): string {
+  return radiusM === 0 ? 'unlimited' : `${radiusM} m`;
+}
+
 function formatResolutionDivisor(divisor: number): string {
   if (divisor <= 1) {
     return '1× (full)';
@@ -833,6 +965,40 @@ function populateForm(options: RecordingOptions): void {
     occupancyMinConfidenceValue.textContent =
       n === 1 ? '1 (unfiltered)' : String(n);
   }
+  if (occupancyLiveOcclusionCheckbox) {
+    occupancyLiveOcclusionCheckbox.checked = options.occupancy.liveOcclusion;
+  }
+  if (occupancyPersistentOcclusionCheckbox) {
+    occupancyPersistentOcclusionCheckbox.checked =
+      options.occupancy.persistentOcclusion;
+  }
+  if (occupancyOccluderDebugStyleSelect) {
+    occupancyOccluderDebugStyleSelect.value =
+      options.occupancy.occluderDebugStyle;
+  }
+  if (occupancyOccluderMeshModeSelect) {
+    occupancyOccluderMeshModeSelect.value = options.occupancy.occluderMeshMode;
+  }
+  // Camera-local occluder window (Step 2, 2026-07-03 fps plan)
+  if (occupancyOccluderRadiusSlider) {
+    occupancyOccluderRadiusSlider.min = String(
+      OCCUPANCY_CONSTRAINTS.occluderRadiusM.min
+    );
+    occupancyOccluderRadiusSlider.max = String(
+      OCCUPANCY_CONSTRAINTS.occluderRadiusM.max
+    );
+    occupancyOccluderRadiusSlider.step = String(
+      OCCUPANCY_CONSTRAINTS.occluderRadiusM.step
+    );
+    occupancyOccluderRadiusSlider.value = String(
+      options.occupancy.occluderRadiusM
+    );
+  }
+  if (occupancyOccluderRadiusValue) {
+    occupancyOccluderRadiusValue.textContent = formatOccluderRadius(
+      options.occupancy.occluderRadiusM
+    );
+  }
 
   // Frame-tile display-resolution divisor (D7-resolution)
   if (frameTileDisplayDivisorSlider) {
@@ -854,6 +1020,24 @@ function populateForm(options: RecordingOptions): void {
       options.frameTileDisplay.divisor
     );
   }
+  // Live frame-tile FIFO cap (Step 4, 2026-07-03 fps plan)
+  if (frameTileMaxTilesSlider) {
+    frameTileMaxTilesSlider.min = String(
+      FRAME_TILE_DISPLAY_CONSTRAINTS.maxTiles.min
+    );
+    frameTileMaxTilesSlider.max = String(
+      FRAME_TILE_DISPLAY_CONSTRAINTS.maxTiles.max
+    );
+    frameTileMaxTilesSlider.step = String(
+      FRAME_TILE_DISPLAY_CONSTRAINTS.maxTiles.step
+    );
+    frameTileMaxTilesSlider.value = String(options.frameTileDisplay.maxTiles);
+  }
+  if (frameTileMaxTilesValue) {
+    frameTileMaxTilesValue.textContent = formatMaxTiles(
+      options.frameTileDisplay.maxTiles
+    );
+  }
 
   // Live debug-overlay toggles (Finding B)
   if (vizFrameTilesCheckbox) {
@@ -868,6 +1052,12 @@ function populateForm(options: RecordingOptions): void {
   }
   if (vizCompassCubesCheckbox) {
     vizCompassCubesCheckbox.checked = options.visualization.compassCubes;
+  }
+  if (vizHeadingUpMapCheckbox) {
+    vizHeadingUpMapCheckbox.checked = options.visualization.headingUpMap;
+  }
+  if (vizStatsOverlayCheckbox) {
+    vizStatsOverlayCheckbox.checked = options.visualization.statsOverlay;
   }
 
   // Compass alignment debug toggles (Phase-4)

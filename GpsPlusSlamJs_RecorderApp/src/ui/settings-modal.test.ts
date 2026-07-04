@@ -162,6 +162,45 @@ describe('settings-modal', () => {
       expect(html).toContain('id="occupancy-min-confidence-value"');
     });
 
+    it('includes the persistent mesh-occluder checkbox', () => {
+      // 2026-06-13 occupancy-mesh-options plan: the persistent depth-only
+      // occluder (occupancy.persistentOcclusion) must be toggleable here.
+      const html = loadSettingsModalHtml();
+      expect(html).toContain('id="occupancy-persistent-occlusion"');
+    });
+
+    it('includes the live depth-occluder checkbox', () => {
+      // 2026-06-29 two-composable-occlusion-toggles: the live CPU-depth occluder
+      // (occupancy.liveOcclusion) is the second, independent checkbox.
+      const html = loadSettingsModalHtml();
+      expect(html).toContain('id="occupancy-live-occlusion"');
+    });
+
+    it('includes the occluder debug-style selector with all five styles', () => {
+      // 2026-07-02 debug-viz-styles plan: a <select>
+      // (occupancy.occluderDebugStyle) replaced the former debug-viz checkbox —
+      // it picks which visible debug skin(s) render the persistent occluder
+      // mesh (matcap / depth-shaded / wireframe / both / off).
+      const html = loadSettingsModalHtml();
+      expect(html).toContain('id="occupancy-occluder-debug-style"');
+      expect(html).toContain('value="off"');
+      expect(html).toContain('value="matcap"');
+      expect(html).toContain('value="depth-shaded"');
+      expect(html).toContain('value="wireframe"');
+      expect(html).toContain('value="depth-shaded-wireframe"');
+    });
+
+    it('includes the occluder mesh-style selector with all three modes', () => {
+      // 2026-06-30 F2/F2b: a <select> (occupancy.occluderMeshMode) to switch the
+      // persistent-occluder mesher between blocky cubes, corner-fit cubes and
+      // surface nets so the surface-hugging meshers can be A/B-tested on-device.
+      const html = loadSettingsModalHtml();
+      expect(html).toContain('id="occupancy-occluder-mesh-mode"');
+      expect(html).toContain('value="greedy"');
+      expect(html).toContain('value="corner-fit"');
+      expect(html).toContain('value="smooth"');
+    });
+
     it('includes the frame-tile display-resolution slider and value display', () => {
       // D7-resolution, 2026-06-16 user feedback: the in-AR/replay tile display
       // resolution (frameTileDisplay.divisor) must be user-configurable here,
@@ -185,16 +224,100 @@ describe('settings-modal', () => {
       expect(html).toContain('id="btn-ar-minimal-baseline"');
     });
 
-    it('includes the four live debug-overlay toggles (Finding B)', () => {
+    it('includes the live debug-overlay toggles (Finding B) + heading-up map', () => {
       // Why this test matters: the `visualization` group must be operable from
-      // the settings modal — one checkbox per live overlay, with the DB-3
-      // section heading + note so users know it is live-only.
+      // the settings modal — one checkbox per live overlay (plus the heading-up
+      // minimap preference), with the DB-3 section heading + note so users know
+      // it is live-only.
       const html = loadSettingsModalHtml();
       expect(html).toContain('Show during recording (3D debug overlays)');
       expect(html).toContain('id="viz-frame-tiles"');
       expect(html).toContain('id="viz-occupancy-cubes"');
       expect(html).toContain('id="viz-gps-alignment-markers"');
       expect(html).toContain('id="viz-compass-cubes"');
+      expect(html).toContain('id="viz-heading-up-map"');
+      // Step 0 of the 2026-07-03 long-session fps plan: the perf stats
+      // toggle lives in the same section, with the dom-overlay dependency
+      // spelled out (with DOM overlay disabled it cannot composite in AR).
+      expect(html).toContain('id="viz-stats-overlay"');
+      expect(html).toContain('Stats need the DOM overlay');
+    });
+
+    it('populates the stats-overlay checkbox from saved options and updates the working copy', () => {
+      // Why this test matters: statsOverlay is the visualization group's one
+      // OFF-by-default field — the round-trip must preserve an operator's
+      // opt-in and the checkbox must never come up checked by default.
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ visualization: { statsOverlay: true } })
+      );
+
+      initSettingsModal();
+      showSettingsModal();
+
+      const checkbox = document.getElementById(
+        'viz-stats-overlay'
+      ) as HTMLInputElement;
+      expect(checkbox.checked).toBe(true);
+
+      checkbox.checked = false;
+      checkbox.dispatchEvent(new Event('change'));
+      expect(getWorkingOptions()?.visualization.statsOverlay).toBe(false);
+    });
+
+    it('defaults the stats-overlay checkbox to off (debug tool, off by default)', () => {
+      localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({}));
+      initSettingsModal();
+      showSettingsModal();
+      const checkbox = document.getElementById(
+        'viz-stats-overlay'
+      ) as HTMLInputElement;
+      expect(checkbox.checked).toBe(false);
+    });
+
+    it('populates the occluder-radius slider (Step 2) and updates the working copy, labelling 0 as unlimited', () => {
+      // Why: occluderRadiusM bounds the per-refresh occluder snapshot/mesh
+      // cost — the slider must round-trip the stored value and present the
+      // 0 opt-out as "unlimited" (the safe pre-Step-2 fallback).
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ occupancy: { occluderRadiusM: 50 } })
+      );
+      initSettingsModal();
+      showSettingsModal();
+
+      const slider = document.getElementById(
+        'occupancy-occluder-radius'
+      ) as HTMLInputElement;
+      const label = document.getElementById('occupancy-occluder-radius-value');
+      expect(slider.value).toBe('50');
+      expect(label?.textContent).toBe('50 m');
+
+      slider.value = '0';
+      slider.dispatchEvent(new Event('input'));
+      expect(getWorkingOptions()?.occupancy.occluderRadiusM).toBe(0);
+      expect(label?.textContent).toBe('unlimited');
+    });
+
+    it('populates the live tile-cap slider (Step 4) and updates the working copy, labelling 0 as unlimited', () => {
+      // Why: the FIFO cap bounds live draw calls/GPU memory on long walks —
+      // the slider must round-trip the stored value and make the 0 opt-out
+      // legible as "unlimited" rather than a confusing "0 tiles".
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ frameTileDisplay: { maxTiles: 250 } })
+      );
+      initSettingsModal();
+      showSettingsModal();
+
+      const slider = document.getElementById(
+        'frame-tile-max-tiles'
+      ) as HTMLInputElement;
+      const label = document.getElementById('frame-tile-max-tiles-value');
+      expect(slider.value).toBe('250');
+      expect(label?.textContent).toBe('250');
+
+      slider.value = '0';
+      slider.dispatchEvent(new Event('input'));
+      expect(getWorkingOptions()?.frameTileDisplay.maxTiles).toBe(0);
+      expect(label?.textContent).toBe('unlimited');
     });
 
     it('includes "Clear Reference Point Cache" button', () => {
@@ -366,6 +489,157 @@ describe('settings-modal', () => {
         'occupancy-min-confidence-value'
       );
       expect(valueDisplay?.textContent).toBe('1 (unfiltered)');
+    });
+
+    it('populates the persistent-occluder checkbox from saved options (migrating the legacy field) and updates the working copy', () => {
+      // Persisted with the LEGACY single boolean — the options migration must
+      // map occlusionMeshEnabled=true onto persistentOcclusion so the checkbox
+      // reflects it (2026-06-29 two-boolean split).
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ occupancy: { occlusionMeshEnabled: true } })
+      );
+
+      showSettingsModal();
+
+      const checkbox = document.getElementById(
+        'occupancy-persistent-occlusion'
+      ) as HTMLInputElement;
+      expect(checkbox.checked).toBe(true);
+
+      // Toggling it off mutates the working options (persisted on Save).
+      checkbox.checked = false;
+      checkbox.dispatchEvent(new Event('change'));
+      expect(getWorkingOptions()?.occupancy.persistentOcclusion).toBe(false);
+    });
+
+    it('defaults the persistent-occluder checkbox to ON (feature on by default since 2026-07-01)', () => {
+      localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({}));
+      showSettingsModal();
+      const checkbox = document.getElementById(
+        'occupancy-persistent-occlusion'
+      ) as HTMLInputElement;
+      expect(checkbox.checked).toBe(true);
+    });
+
+    it('populates the live-occluder checkbox from saved options and updates the working copy', () => {
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ occupancy: { liveOcclusion: true } })
+      );
+
+      showSettingsModal();
+
+      const checkbox = document.getElementById(
+        'occupancy-live-occlusion'
+      ) as HTMLInputElement;
+      expect(checkbox.checked).toBe(true);
+
+      // Toggling it off mutates the working options (persisted on Save).
+      checkbox.checked = false;
+      checkbox.dispatchEvent(new Event('change'));
+      expect(getWorkingOptions()?.occupancy.liveOcclusion).toBe(false);
+    });
+
+    it('defaults the live-occluder checkbox to off (feature off by default)', () => {
+      localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({}));
+      showSettingsModal();
+      const checkbox = document.getElementById(
+        'occupancy-live-occlusion'
+      ) as HTMLInputElement;
+      expect(checkbox.checked).toBe(false);
+    });
+
+    it('populates the occluder debug-style select from saved options and updates the working copy', () => {
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ occupancy: { occluderDebugStyle: 'wireframe' } })
+      );
+
+      showSettingsModal();
+
+      const select = document.getElementById(
+        'occupancy-occluder-debug-style'
+      ) as HTMLSelectElement;
+      expect(select.value).toBe('wireframe');
+
+      // Switch to the combined style → working copy updates (persisted on Save).
+      select.value = 'depth-shaded-wireframe';
+      select.dispatchEvent(new Event('change'));
+      expect(getWorkingOptions()?.occupancy.occluderDebugStyle).toBe(
+        'depth-shaded-wireframe'
+      );
+    });
+
+    it("defaults the occluder debug-style select to 'off' (debug rendering off by default)", () => {
+      localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({}));
+      showSettingsModal();
+      const select = document.getElementById(
+        'occupancy-occluder-debug-style'
+      ) as HTMLSelectElement;
+      expect(select.value).toBe('off');
+    });
+
+    it("shows 'matcap' for a saved legacy occluderDebugViz=true (boolean migration)", () => {
+      // The pre-2026-07-02 boolean must keep its meaning: true used to enable
+      // the matcap skin, so the migrated select shows 'matcap' — not 'off'.
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ occupancy: { occluderDebugViz: true } })
+      );
+      showSettingsModal();
+      const select = document.getElementById(
+        'occupancy-occluder-debug-style'
+      ) as HTMLSelectElement;
+      expect(select.value).toBe('matcap');
+    });
+
+    it('populates the occluder mesh-style select from saved options and updates the working copy', () => {
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({ occupancy: { occluderMeshMode: 'smooth' } })
+      );
+
+      showSettingsModal();
+
+      const select = document.getElementById(
+        'occupancy-occluder-mesh-mode'
+      ) as HTMLSelectElement;
+      expect(select.value).toBe('smooth');
+
+      // Switch to the improved-cube ('corner-fit') mesher → working copy updates.
+      select.value = 'corner-fit';
+      select.dispatchEvent(new Event('change'));
+      expect(getWorkingOptions()?.occupancy.occluderMeshMode).toBe(
+        'corner-fit'
+      );
+    });
+
+    it("defaults the occluder mesh-style select to 'smooth' (Naive Surface Nets, default since 2026-07-01)", () => {
+      localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({}));
+      showSettingsModal();
+      const select = document.getElementById(
+        'occupancy-occluder-mesh-mode'
+      ) as HTMLSelectElement;
+      expect(select.value).toBe('smooth');
+    });
+
+    it('lets the live and persistent occluders be ticked together (they compose)', () => {
+      localStorageMock.getItem.mockReturnValueOnce(
+        JSON.stringify({
+          occupancy: { liveOcclusion: true, persistentOcclusion: true },
+        })
+      );
+      showSettingsModal();
+      expect(
+        (
+          document.getElementById(
+            'occupancy-live-occlusion'
+          ) as HTMLInputElement
+        ).checked
+      ).toBe(true);
+      expect(
+        (
+          document.getElementById(
+            'occupancy-persistent-occlusion'
+          ) as HTMLInputElement
+        ).checked
+      ).toBe(true);
     });
 
     it('populates AR crash isolation checkbox from saved options', () => {
@@ -647,9 +921,11 @@ describe('settings-modal', () => {
       ) as HTMLInputElement | null;
       expect(angular).not.toBeNull();
       expect(linear).not.toBeNull();
-      // Defaults from DEFAULT_MOTION_FILTER (0.6 rad/s, 0.5 m/s).
+      // Defaults from DEFAULT_MOTION_FILTER (0.6 rad/s, 2.5 m/s — the linear
+      // threshold was raised 0.5 → 2.5 on 2026-07-02 to stop deferring walking;
+      // see 2026-07-02-image-capture-rate-motion-gate-finding.md).
       expect(parseFloat(angular!.value)).toBeCloseTo(0.6, 6);
-      expect(parseFloat(linear!.value)).toBeCloseTo(0.5, 6);
+      expect(parseFloat(linear!.value)).toBeCloseTo(2.5, 6);
     });
 
     it('persists edited threshold values through save/load', () => {
@@ -823,18 +1099,20 @@ describe('settings-modal', () => {
   });
 
   describe('live debug-overlay toggles (Finding B)', () => {
-    // Why these tests matter: each toggle gates a live overlay (frame tiles,
-    // occupancy cubes, GPS+VIO alignment spheres, compass cubes). All four
-    // default ON (purely additive). The settings UI must round-trip each:
-    // populate from saved options and persist a change back to storage.
+    // Why these tests matter: each toggle gates a live feature (frame tiles,
+    // occupancy cubes, GPS+VIO alignment spheres, compass cubes, heading-up
+    // minimap). All default ON (purely additive). The settings UI must
+    // round-trip each: populate from saved options and persist a change back to
+    // storage.
     const TOGGLE_IDS = [
       ['viz-frame-tiles', 'frameTiles'],
       ['viz-occupancy-cubes', 'occupancyCubes'],
       ['viz-gps-alignment-markers', 'gpsAlignmentMarkers'],
       ['viz-compass-cubes', 'compassCubes'],
+      ['viz-heading-up-map', 'headingUpMap'],
     ] as const;
 
-    it('all four default to checked (ON) — purely additive', () => {
+    it('all default to checked (ON) — purely additive', () => {
       initSettingsModal();
       showSettingsModal();
 

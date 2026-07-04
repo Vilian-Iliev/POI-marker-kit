@@ -226,10 +226,14 @@ export class ImageQualityGate {
       Number.isFinite(historySize) && historySize >= 1
         ? Math.floor(historySize)
         : DEFAULT_SHARPNESS_HISTORY_SIZE;
-    this.minSamples =
+    const wantedMinSamples =
       Number.isFinite(minSamples) && minSamples >= 1
         ? Math.floor(minSamples)
         : DEFAULT_SHARPNESS_MIN_SAMPLES;
+    // The rolling history never grows past historySize, so a minSamples above
+    // it could never be reached — the blur check would silently never arm.
+    // Clamp so the gate always warms up once the window is full.
+    this.minSamples = Math.min(wantedMinSamples, this.historySize);
   }
 
   /**

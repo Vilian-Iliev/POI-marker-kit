@@ -50,7 +50,12 @@
             <span class="text-gray-400">Sync:</span>
             <span id="sync-status" class="text-green-400">--</span>
           </div>
-          <div id="abs-compass-info" class="text-sm mt-1 hidden">
+          <div
+            id="abs-compass-info"
+            class="text-sm mt-1 hidden"
+            role="status"
+            aria-live="polite"
+          >
             <span class="text-gray-400">🧭 AbsCompass:</span>
             <span id="abs-compass-status" class="text-green-400">--</span>
           </div>
@@ -889,7 +894,7 @@ No errors</pre
 
             <!-- Enter AR Hint - explains why the button is disabled -->
             <p id="enter-ar-hint" class="text-xs text-yellow-400 text-center">
-              Select a folder to continue
+              Choose a save location for this recording
             </p>
 
             <!-- Primary action (D6 item 9: dominant CTA — larger, bold). -->
@@ -935,7 +940,7 @@ No errors</pre
         class="hidden fixed inset-0 z-[70] bg-black/50 flex items-center justify-center"
       >
         <div
-          class="bg-gray-800 rounded-lg p-6 w-80 max-h-[90vh] overflow-y-auto"
+          class="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto"
         >
           <div class="flex justify-between items-center mb-4">
             <h2 class="text-lg font-semibold text-white">Recording Settings</h2>
@@ -991,6 +996,7 @@ No errors</pre
                 <input
                   type="range"
                   id="images-max-angular"
+                  aria-label="Max rotation speed"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
               </div>
@@ -1002,6 +1008,7 @@ No errors</pre
                 <input
                   type="range"
                   id="images-max-linear"
+                  aria-label="Max move speed"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
               </div>
@@ -1032,6 +1039,7 @@ No errors</pre
                 <input
                   type="range"
                   id="images-blur-threshold"
+                  aria-label="Blur sensitivity"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
               </div>
@@ -1043,6 +1051,7 @@ No errors</pre
                 <input
                   type="range"
                   id="images-min-luminance"
+                  aria-label="Black cutoff"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
               </div>
@@ -1054,6 +1063,7 @@ No errors</pre
                 <input
                   type="range"
                   id="images-interval"
+                  aria-label="Image capture interval"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
               </div>
@@ -1065,6 +1075,7 @@ No errors</pre
                 <input
                   type="range"
                   id="images-quality"
+                  aria-label="Image quality"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
               </div>
@@ -1076,6 +1087,7 @@ No errors</pre
                 <input
                   type="range"
                   id="images-resolution-divisor"
+                  aria-label="Image resolution"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
               </div>
@@ -1091,6 +1103,7 @@ No errors</pre
                 <input
                   type="range"
                   id="frame-tile-display-divisor"
+                  aria-label="Display resolution (AR tiles)"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
                 <p class="text-xs text-gray-500">
@@ -1098,6 +1111,25 @@ No errors</pre
                   frames (not a camera zoom). This only changes how sharply
                   they’re drawn, to save memory — the saved image quality is set
                   by “Resolution” above.
+                </p>
+              </div>
+              <!-- Live frame-tile cap (Step 4, 2026-07-03 long-session fps    -->
+              <!-- plan): FIFO bound on live tiles; replay is never capped.    -->
+              <div class="space-y-1">
+                <div class="flex justify-between text-xs text-gray-400">
+                  <span>Max live tiles (0 = unlimited)</span>
+                  <span id="frame-tile-max-tiles-value">100</span>
+                </div>
+                <input
+                  type="range"
+                  id="frame-tile-max-tiles"
+                  aria-label="Max live tiles"
+                  class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+                <p class="text-xs text-gray-500">
+                  During recording, only the newest tiles stay in the scene
+                  (oldest are removed) so long walks keep a steady framerate.
+                  Replay always shows every captured frame.
                 </p>
               </div>
             </div>
@@ -1127,6 +1159,7 @@ No errors</pre
                 <input
                   type="range"
                   id="depth-interval"
+                  aria-label="Depth sampling interval"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
               </div>
@@ -1138,6 +1171,7 @@ No errors</pre
                 <input
                   type="range"
                   id="depth-grid"
+                  aria-label="Depth grid size"
                   class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                 />
               </div>
@@ -1192,11 +1226,120 @@ No errors</pre
                 />
               </div>
               <p class="text-[11px] text-gray-400">
-                How many times a voxel must be observed before it is drawn.
-                Higher hides single-frame depth noise (e.g. phantom voxels below
-                the floor) but may drop briefly-seen surfaces. 1 = unfiltered.
-                Applies the next time you enter AR or load a replay.
+                How many times a voxel must be observed before it counts as
+                occupied — the same floor gates the debug cubes, the occluder
+                mesh and the COLMAP export. Higher hides single-frame depth
+                noise (e.g. phantom voxels below the floor) but may drop
+                briefly-seen surfaces. 1 = unfiltered. Applies the next time you
+                enter AR or load a replay.
               </p>
+              <label class="flex items-center gap-2 cursor-pointer mt-1">
+                <input
+                  type="checkbox"
+                  id="occupancy-live-occlusion"
+                  class="w-4 h-4 accent-blue-500"
+                />
+                <span class="text-sm text-gray-200"
+                  >Live depth occluder (experimental)</span
+                >
+              </label>
+              <p class="text-[11px] text-gray-400">
+                Hide virtual objects behind the real surface the camera sees
+                right now (sharp, no memory). Experimental: occlusion quality is
+                still being tuned on device. Off by default. Tick together with
+                the persistent mesh below to combine live + remembered
+                occlusion.
+              </p>
+              <label class="flex items-center gap-2 cursor-pointer mt-1">
+                <input
+                  type="checkbox"
+                  id="occupancy-persistent-occlusion"
+                  class="w-4 h-4 accent-blue-500"
+                />
+                <span class="text-sm text-gray-200"
+                  >Persistent mesh occluder</span
+                >
+              </label>
+              <p class="text-[11px] text-gray-400">
+                Mesh the occupancy grid into an invisible depth-only surface so
+                real geometry hides virtual objects placed behind it — including
+                surfaces you already walked past. On by default (meshed
+                off-thread, so it no longer stalls rendering). Applies the next
+                time you enter AR or load a replay.
+              </p>
+              <label
+                class="block text-sm text-gray-200 mt-1"
+                for="occupancy-occluder-mesh-mode"
+                >Occluder mesh style</label
+              >
+              <select
+                id="occupancy-occluder-mesh-mode"
+                class="w-full mt-1 text-sm bg-gray-700 text-gray-200 rounded px-2 py-1"
+              >
+                <option value="greedy">Cubes (blocky)</option>
+                <option value="corner-fit">Corner-fit cubes (smoothed)</option>
+                <option value="smooth" selected>
+                  Surface nets (smoothest)
+                </option>
+              </select>
+              <p class="text-[11px] text-gray-400">
+                How the persistent occluder mesh is built. “Surface nets” is the
+                default — the smoothest (hugs the floor, but an open sheet over
+                thin features, so it can leak occlusion at concave wall–floor
+                seams); “Cubes” is blocky but watertight; “Corner-fit” nudges
+                the cube corners toward the measured surface while keeping their
+                cube shape (gap-free/watertight). Pick an “Occluder debug style”
+                below to see the shape. Only affects the persistent mesh
+                occluder above; applies the next time you enter AR or load a
+                replay.
+              </p>
+              <label class="block text-sm text-gray-200 mt-1"
+                >Occluder debug style</label
+              >
+              <select
+                id="occupancy-occluder-debug-style"
+                class="w-full mt-1 text-sm bg-gray-700 text-gray-200 rounded px-2 py-1"
+              >
+                <option value="off" selected>Off</option>
+                <option value="matcap">Matcap (shiny surface)</option>
+                <option value="depth-shaded">
+                  Depth-shaded (near bright, far dark + rim)
+                </option>
+                <option value="wireframe">Wireframe (triangulation)</option>
+                <option value="depth-shaded-wireframe">
+                  Depth-shaded + wireframe
+                </option>
+              </select>
+              <p class="text-[11px] text-gray-400">
+                Renders the persistent occluder mesh visibly so its shape and
+                structure can be judged: “Depth-shaded” separates overlapping
+                near/far layers (distance fade + silhouette rim), “Wireframe”
+                shows the actual triangulation of the mesh style above. It still
+                occludes in every style. Only visible when the persistent mesh
+                occluder above is on. Off by default; applies the next time you
+                enter AR or load a replay.
+              </p>
+              <!-- Camera-local occluder window (Step 2, 2026-07-03           -->
+              <!-- long-session fps plan): bounds the per-refresh snapshot    -->
+              <!-- + re-mesh by the neighbourhood. 0 = unlimited.             -->
+              <div class="space-y-1">
+                <div class="flex justify-between text-xs text-gray-400">
+                  <span>Occluder radius (0 = unlimited)</span>
+                  <span id="occupancy-occluder-radius-value">25 m</span>
+                </div>
+                <input
+                  type="range"
+                  id="occupancy-occluder-radius"
+                  aria-label="Occluder radius"
+                  class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+                <p class="text-[11px] text-gray-400">
+                  Only surfaces within this distance occlude virtual content —
+                  keeps long walks fast. Everything stays remembered: walking
+                  back rebuilds far geometry instantly. Applies the next time
+                  you enter AR or load a replay.
+                </p>
+              </div>
             </div>
           </div>
 
@@ -1308,6 +1451,31 @@ No errors</pre
                   >Compass orientation cubes</span
                 >
               </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  id="viz-heading-up-map"
+                  class="w-4 h-4 accent-blue-500"
+                  checked
+                />
+                <span class="text-sm text-gray-200"
+                  >Rotate minimap to my heading (heading-up)</span
+                >
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  id="viz-stats-overlay"
+                  class="w-4 h-4 accent-blue-500"
+                />
+                <span class="text-sm text-gray-200"
+                  >Performance stats (FPS / ms / MB) — also in replay</span
+                >
+              </label>
+              <p class="text-[11px] text-gray-400">
+                Stats need the DOM overlay: with "DOM Overlay" disabled under AR
+                crash isolation they can't be shown in AR.
+              </p>
             </div>
           </div>
 

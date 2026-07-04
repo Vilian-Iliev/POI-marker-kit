@@ -73,14 +73,18 @@ import {
   setTrackingCallbacks,
   setTrackingRecoveredCallback,
   setTrackingStore,
+  setSessionEndCallback,
   getScene,
   getCamera,
   getArWorldGroup,
   setScene,
   setArWorldGroup,
+  getDepthInfoFromFrame,
   type CapturedImage,
   type DepthSample,
 } from 'gps-plus-slam-app-framework/ar/webxr-session';
+import { DepthOccluder } from 'gps-plus-slam-app-framework/ar/depth-occluder';
+import { registerXrFrameUpdate } from 'gps-plus-slam-app-framework/ar/xr-frame-loop';
 import { getXrErrorMessage } from 'gps-plus-slam-app-framework/ar/xr-error-handler';
 import { applyChromiumProjectionLayerWorkaround } from 'gps-plus-slam-app-framework/ar/chromium-camera-access-workaround';
 import {
@@ -95,6 +99,7 @@ import {
   hasReadFolderPermission,
 } from './storage/external-file-storage';
 import { createRecordingSessionHandlers } from './recording/recording-session-handlers';
+import { createSystemSessionEndHandler } from './recording/system-session-end';
 import { createFolderManager } from './storage/folder-manager';
 
 import {
@@ -113,6 +118,7 @@ import {
   initNavigation,
   pushScreenState,
   replaceScreenState,
+  getCurrentScreen,
 } from './ui/navigation';
 import {
   createRecorderStore,
@@ -151,6 +157,11 @@ import { wireFrameTileSubscribers } from './visualization/wire-frame-tile-subscr
 import { FrameBlobCache } from './visualization/frame-blob-cache';
 import { OccupancyGrid } from 'gps-plus-slam-app-framework/ar/occupancy-grid';
 import { OccupancyCubesVisualizer } from './visualization/occupancy-cubes-visualizer';
+import {
+  createOccluderSink,
+  type OccluderSink,
+  type OccluderSinkHandle,
+} from './visualization/occluder-sink';
 import { wireOccupancyGridSubscribers } from './visualization/wire-occupancy-grid-subscribers';
 import { setOccupancyGrid } from './state/occupancy-grid-provider';
 import { SESSION_IMAGES_DIR } from 'gps-plus-slam-app-framework/storage/file-system-utils';
@@ -184,6 +195,10 @@ import {
   type RecordingOptions,
 } from 'gps-plus-slam-app-framework/state/recording-options';
 import { initSettingsModal } from './ui/settings-modal';
+import {
+  createStatsOverlay,
+  type StatsOverlayHandle,
+} from './ui/stats-overlay';
 import { wireQrRecording } from './qr/wire-qr-recording';
 import type { QrDetectionController } from 'gps-plus-slam-app-framework/ar';
 
@@ -261,12 +276,29 @@ const liveFrameBlobs = new FrameBlobCache({
 let frameTileVisualizer: FrameTileVisualizer | null = null;
 let unsubscribeFrameTiles: (() => void) | null = null;
 
+// Perf stats overlay (visualization.statsOverlay, OFF by default) — Step 0 of
+// the 2026-07-03 long-session fps plan. Mounted into the #app dom-overlay root
+// at Enter-AR, advanced from the setFrameCallback tick, disposed on re-enter +
+// in resetMainState (same lifecycle as the frame-tile visualizer).
+let statsOverlay: StatsOverlayHandle | null = null;
+
 // Occupancy-grid cubes (2026-06-11 depth occupancy-grid port plan): the
 // grid is derived state fed from `recordDepthSample` actions via
 // `wireOccupancyGridSubscribers`; the instanced-cube visualizer paints it
 // in the live AR scene at ~1 Hz.
 let occupancyGrid: OccupancyGrid | null = null;
 let occupancyCubesVisualizer: OccupancyCubesVisualizer | null = null;
+// Persistent depth-only occluder (ON by default — occupancy.persistentOcclusion).
+// One handle owns the mesh + off-thread worker + sink (occluder-sink.ts, the
+// wiring shared with replay); dispose() releases all three and no-ops the
+// async sink callbacks. Disposed on re-enter + in resetMainState.
+let occluderSinkHandle: OccluderSinkHandle | null = null;
+// Live CPU-depth occluder (off by default — occupancy.liveOcclusion). Lifecycle
+// mirrors `occluderSinkHandle`: disposed on re-enter + in resetMainState (not via the
+// framework session-disposer registry). `liveOccluderUnregisterFrame` unhooks
+// the per-frame depth feed alongside the dispose.
+let liveOccluder: DepthOccluder | null = null;
+let liveOccluderUnregisterFrame: (() => void) | null = null;
 let unsubscribeOccupancyGrid: (() => void) | null = null;
 
 // Live QR recording (opt-in, recording-options `qr`). The thin RAW producer
@@ -558,6 +590,19 @@ export function setCurrentScenarioName(name: string): void {
 }
 
 /**
+ * Tear down the live CPU-depth occluder: unhook its per-frame depth feed and
+ * dispose it (which removes its full-screen mesh from `arWorldGroup`). Safe to
+ * call when nothing is wired. Used on re-enter and in `resetMainState`, mirroring
+ * how `occluderSinkHandle` is managed.
+ */
+function disposeLiveOccluder(): void {
+  liveOccluderUnregisterFrame?.();
+  liveOccluderUnregisterFrame = null;
+  liveOccluder?.dispose();
+  liveOccluder = null;
+}
+
+/**
  * Reset main module state.
  * Exported for testing purposes to ensure test isolation.
  */
@@ -590,6 +635,12 @@ export function resetMainState(): void {
     frameTileVisualizer.dispose();
     frameTileVisualizer = null;
   }
+  // Perf stats overlay — remove the panels so they don't linger (frozen) on
+  // the setup screen after the AR session ends.
+  if (statsOverlay) {
+    statsOverlay.dispose();
+    statsOverlay = null;
+  }
   // Occupancy-grid teardown — stop feeding the grid and release the
   // instanced mesh once the AR session ends.
   if (unsubscribeOccupancyGrid) {
@@ -600,6 +651,9 @@ export function resetMainState(): void {
     occupancyCubesVisualizer.dispose();
     occupancyCubesVisualizer = null;
   }
+  occluderSinkHandle?.dispose();
+  occluderSinkHandle = null;
+  disposeLiveOccluder();
   occupancyGrid = null;
   setOccupancyGrid(null);
   // Live QR teardown — stop capture, detach the producer + debug-viz subscriber.
@@ -699,12 +753,15 @@ export function getReplaySessionEntriesForTesting(): SessionEntry[] {
  * Preserves:
  * - Read folder handle (so user doesn't re-select the folder)
  * - Imported reference points (loaded from the read folder)
- * - AR/WebXR session (stays alive, user returns to AR_READY)
  * - Recording options (user settings from localStorage)
  * - OPFS root/scenarios directory handles (storage stays initialized)
  * - Logger subscribers and buffer
  *
  * Resets:
+ * - AR/WebXR session (ended — the setup screen requires Enter AR again, and
+ *   initAR() throws on a live session, so a preserved session would make the
+ *   first Enter AR after the reset fail; see
+ *   GpsPlusSlamJs_Docs docs/2026-07-04-soft-reset-end-ar-session-plan.md)
  * - Store (fresh Redux store for new session)
  * - Session/scenario names
  * - Sync manager, trackers, map overlay
@@ -725,6 +782,17 @@ export async function resetForNewRecording(): Promise<void> {
   if (mapOverlay) {
     mapOverlay.dispose();
     mapOverlay = null;
+  }
+
+  // End the WebXR session so the next Enter AR initializes cleanly (initAR
+  // rejects while a session is live). Fires the framework session-end
+  // callback with requestedByApp: true, which the system-session-end handler
+  // deliberately ignores. Best-effort: a rejected end must not abort the
+  // reset — endARSession() leaves the framework re-initialisable either way.
+  try {
+    await endARSession();
+  } catch (err) {
+    log.warn('Ending AR session during soft reset failed; continuing:', err);
   }
 
   // Reset recording-level counters
@@ -1153,11 +1221,38 @@ async function handleEnterAR(): Promise<void> {
       log.info('AR tracking recovered (same coordinate frame)');
     });
 
+    // F3 (2026-07-04): react to a SYSTEM-initiated session end (Android back
+    // gesture ends the XRSession directly — uncancelable). Mid-recording this
+    // auto-stops + saves and lands on the summary with a toast; in AR_READY it
+    // returns to setup. The framework clears this callback on every session
+    // end, so it is re-registered here on each Enter AR.
+    const systemSessionEndHandler = createSystemSessionEndHandler({
+      getCurrentScreen,
+      stopRecording: () => recordingSessionHandlers.handleStopRecording(),
+      replaceScreen: replaceScreenState,
+      showSetupUi: showSetupModal,
+      showToast: (message) => showToast(message),
+      showError,
+    });
+    // Fire-and-forget: the handler resolves its own errors (showError); the
+    // framework callback contract is synchronous.
+    setSessionEndCallback((info) => {
+      void systemSessionEndHandler(info);
+    });
+
     const appContainer = document.getElementById('app');
     if (!appContainer) {
       throw new Error('Missing #app container element');
     }
-    await initAR(appContainer, recordingOptions.arCrashIsolation);
+    // Live depth occluder (opt-in, off by default): request the
+    // `cpu-optimized` depth-sensing feature for the live occluder even when
+    // depth *recording* is off, so the session negotiates the depth stream the
+    // occluder consumes. The render-side integration (the full-screen
+    // DepthOccluder fed per frame) is wired below once arWorldGroup exists; its
+    // on-device occlusion quality is still being tuned.
+    await initAR(appContainer, recordingOptions.arCrashIsolation, {
+      requestDepthOcclusion: recordingOptions.occupancy.liveOcclusion === true,
+    });
 
     // Set up image capture callback (must be done after AR init)
     // Issue #11: Pass onCaptureFailed callback to track capture failures
@@ -1193,6 +1288,22 @@ async function handleEnterAR(): Promise<void> {
       // GpsPlusSlamJs_Docs/docs/2026-06-14-followup-frame-tile-legacy-aspect-and-live-toggle.md.
       const viz = recordingOptions.visualization;
 
+      // Perf stats overlay (Step 0 of the 2026-07-03 long-session fps plan).
+      // Teardown is unconditional (turning the toggle off must remove a prior
+      // cycle's panels); creation is gated. Mounted into the #app dom-overlay
+      // root so it composites over the AR view; advanced once per XR frame in
+      // the setFrameCallback tick below. Best-effort: a failure must not
+      // break the AR session.
+      statsOverlay?.dispose();
+      statsOverlay = null;
+      if (viz.statsOverlay) {
+        try {
+          statsOverlay = createStatsOverlay(appContainer);
+        } catch (err) {
+          log.warn('Stats overlay skipped; session continues without it', err);
+        }
+      }
+
       // Compass cubes — recorder-side skip. Nothing non-visual depends on them.
       if (viz.compassCubes) {
         createGpsCompassCubes(cameraFollower.object3D);
@@ -1227,7 +1338,12 @@ async function handleEnterAR(): Promise<void> {
           // Parent under arWorldGroup (NOT the scene root): the selector
           // emits raw-WebXR poses, so tiles must ride the camera's
           // alignment × WEBXR_TO_NUE chain. See the followup frame-check doc.
-          frameTileVisualizer = new FrameTileVisualizer(arWorldGroup);
+          // maxTiles: LIVE-ONLY FIFO cap (Step 4, 2026-07-03 fps plan) — the
+          // replay wiring deliberately omits it so coverage auditing sees the
+          // full recorded path.
+          frameTileVisualizer = new FrameTileVisualizer(arWorldGroup, {
+            maxTiles: recordingOptions.frameTileDisplay.maxTiles,
+          });
           // D7-resolution: downscale the live display texture by the
           // configured frameTileDisplay divisor (default ÷2) to cut per-tile
           // GPU memory. Read once here at Enter-AR alongside the other viz
@@ -1267,6 +1383,8 @@ async function handleEnterAR(): Promise<void> {
         unsubscribeOccupancyGrid = null;
         occupancyCubesVisualizer?.dispose();
         occupancyCubesVisualizer = null;
+        occluderSinkHandle?.dispose();
+        occluderSinkHandle = null;
         occupancyGrid = null;
         setOccupancyGrid(null);
 
@@ -1287,23 +1405,56 @@ async function handleEnterAR(): Promise<void> {
         // non-visualizer consumers read it via getOccupancyGrid(). When the
         // overlay is off we wire a no-op sink so the grid still folds in every
         // depth sample without allocating the cube InstancedMesh.
-        const occupancyVisualizerSink: {
+        let occupancyVisualizerSink: {
           refresh(grid: OccupancyGrid): void;
           clear(): void;
-        } = viz.occupancyCubes
-          ? (occupancyCubesVisualizer = new OccupancyCubesVisualizer(
-              arWorldGroup,
-              // Noise filter: only render voxels seen ≥ minConfidence times
-              // (recording-options `occupancy.minConfidence`, default 3). Read
-              // here so a changed value applies on the next Enter-AR, same as
-              // cellSizeM above.
-              { minObservations: recordingOptions.occupancy.minConfidence }
-            ))
-          : { refresh: () => {}, clear: () => {} };
+        };
+        if (viz.occupancyCubes) {
+          occupancyCubesVisualizer = new OccupancyCubesVisualizer(
+            arWorldGroup,
+            // Noise filter: only render voxels seen ≥ minConfidence times
+            // (recording-options `occupancy.minConfidence`, default 3). Read
+            // here so a changed value applies on the next Enter-AR, same as
+            // cellSizeM above.
+            { minObservations: recordingOptions.occupancy.minConfidence }
+          );
+          occupancyVisualizerSink = occupancyCubesVisualizer;
+        } else {
+          occupancyVisualizerSink = { refresh: () => {}, clear: () => {} };
+        }
+
+        // Persistent depth-only occluder (ON by default). When on, it
+        // re-meshes the grid on the same throttle as the cubes and writes depth
+        // (no color) under arWorldGroup so real geometry hides virtual content
+        // placed behind it. The shared factory (occluder-sink.ts — one wiring
+        // for live AND replay) snapshots the SAME minConfidence floor the
+        // cubes/COLMAP use, so the three consumers can't silently diverge; its
+        // handle owns mesh + worker teardown (endARSession disposes it).
+        let occluderSink: OccluderSink | undefined;
+        if (recordingOptions.occupancy.persistentOcclusion) {
+          occluderSinkHandle = createOccluderSink(
+            arWorldGroup,
+            recordingOptions.occupancy
+          );
+          occluderSink = occluderSinkHandle.sink;
+        }
+        // With any camera-relative window active (the cubes window by
+        // default; the occluder when occluderRadiusM > 0), a settled grid
+        // must still re-render when the camera moves — ε = one chunk edge
+        // (16 cells; 2.4 m at the 0.15 m default). See the wirer's
+        // revision-guard docs (Step 2 correctness detail).
+        const anyWindowedConsumer =
+          viz.occupancyCubes ||
+          (recordingOptions.occupancy.persistentOcclusion &&
+            recordingOptions.occupancy.occluderRadiusM > 0);
         unsubscribeOccupancyGrid = wireOccupancyGridSubscribers({
           storeRef,
           grid: occupancyGrid,
           visualizer: occupancyVisualizerSink,
+          occluder: occluderSink,
+          refreshOnCameraMoveM: anyWindowedConsumer
+            ? 16 * recordingOptions.occupancy.cellSizeM
+            : undefined,
           // Tie the cube-refresh throttle to the depth-sample cadence so a
           // faster `depth.intervalMs` (e.g. 500 ms) isn't capped at the old
           // hardcoded 1 Hz. At the default 1000 ms this equals the previous
@@ -1313,10 +1464,47 @@ async function handleEnterAR(): Promise<void> {
           onError: (err) => {
             log.warn('Occupancy grid update failed', err);
           },
+          // Cells-over-time telemetry (Step 0 of the 2026-07-03 long-session
+          // fps plan): one line per ~30 s so a log export correlates grid
+          // growth with the stats overlay's fps trend.
+          onGridSize: (cells) => {
+            log.info(`[OccupancyGrid] ${cells} cells`);
+          },
         });
       } catch (err) {
         log.warn(
           'Occupancy grid wiring skipped; recording continues without depth cubes',
+          err
+        );
+      }
+
+      // Live CPU-depth occluder (opt-in — occupancy.liveOcclusion). The
+      // full-screen depth-write path (v1): each frame we read the full depth and
+      // feed it to the occluder, whose clip-space mesh writes gl_FragDepth so the
+      // real surface hides ALL virtual content behind it — like the persistent
+      // mesh, but for the surface the camera sees *this* frame. Best-effort: a
+      // wiring failure (or a per-frame throw — the registry is try/catch-safe per
+      // callback) must never break the AR session. The on-device occlusion render
+      // is still being brought up, so the checkbox stays experimental.
+      try {
+        disposeLiveOccluder(); // guard a re-enter (mirrors occluderSinkHandle teardown)
+        if (recordingOptions.occupancy.liveOcclusion) {
+          const occluder = new DepthOccluder();
+          liveOccluder = occluder;
+          // The mesh's vertex shader ignores transforms, but parenting under
+          // arWorldGroup keeps it in the AR render pass alongside the content.
+          arWorldGroup.add(occluder.getOcclusionMesh());
+          liveOccluderUnregisterFrame = registerXrFrameUpdate(
+            ({ frame, referenceSpace }) => {
+              const pose = frame.getViewerPose(referenceSpace);
+              const depthInfo = getDepthInfoFromFrame(frame, pose);
+              if (depthInfo) occluder.update(depthInfo);
+            }
+          );
+        }
+      } catch (err) {
+        log.warn(
+          'Live depth occluder wiring skipped; recording continues without it',
           err
         );
       }
@@ -1357,6 +1545,9 @@ async function handleEnterAR(): Promise<void> {
       const dt = (now - lastFrameTime) / 1000;
       lastFrameTime = now;
 
+      // Advance the perf stats panels (FPS/ms/MB) once per rendered XR frame.
+      statsOverlay?.update();
+
       // Update alignment lerper (Issue 4) — interpolate arWorldGroup.matrix
       alignmentLerper?.update(dt);
 
@@ -1367,7 +1558,10 @@ async function handleEnterAR(): Promise<void> {
       }
 
       if (mapOverlay?.isVisible()) {
-        mapOverlay.updatePosition();
+        // Pass the live render camera so heading-up rotation is computed
+        // relative to where the user is actually looking (the same camera the
+        // CSS3D overlay is composited through). See the 2026-06-29 plan.
+        mapOverlay.updatePosition(dt, camera ?? undefined);
       }
     });
 
@@ -1520,6 +1714,9 @@ function handleToggleMap(): void {
 
     mapOverlay = new LeafletMapOverlay(scene, camera, {
       mapParent: cameraFollower?.object3D,
+      // Heading-up minimap rotation: live-only preference (default on), read
+      // here at overlay creation. Replay keeps north-up. See the 2026-06-29 plan.
+      headingUp: recordingOptions.visualization.headingUpMap,
     });
     log.info('Map overlay created lazily on first toggle');
   }
@@ -1576,6 +1773,17 @@ export function handleStopRecordingForTesting(): Promise<void> {
  */
 export function handleEnterARForTesting(): Promise<void> {
   return handleEnterAR();
+}
+
+/**
+ * Exported for testing purposes.
+ * Overrides the module-level recording options (normally loaded once at
+ * bootstrap / reloaded in `main()`), so a test can exercise an Enter-AR path
+ * under a specific option set (e.g. `occupancy.liveOcclusion`) without
+ * re-importing the module.
+ */
+export function setRecordingOptionsForTesting(options: RecordingOptions): void {
+  recordingOptions = options;
 }
 
 /**

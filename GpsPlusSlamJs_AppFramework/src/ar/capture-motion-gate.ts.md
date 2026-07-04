@@ -6,8 +6,8 @@
 
 - **Public API:**
   - `decideCapture(input): 'capture' | 'defer'` — stateless decision over
-    `{ windowMaxAngular, windowMaxLinear, maxAngularVelocity, maxLinearVelocity,
-msSinceDue, maxWaitMs }`. - Returns `'capture'` when both windowed maxima are at/below their
+    `{ windowMaxAngular, windowMaxLinear, maxAngularVelocity, maxLinearVelocity, msSinceDue, maxWaitMs }`.
+    Returns `'capture'` when both windowed maxima are at/below their
     thresholds (calm), OR when `msSinceDue >= maxWaitMs` (never-calm safety
     fallback). Otherwise `'defer'`.
   - `class MotionWindow(size?, angularGlitchCeiling?, linearGlitchCeiling?)` —
@@ -45,7 +45,7 @@ msSinceDue, maxWaitMs }`. - Returns `'capture'` when both windowed maxima are at
     windowMaxAngular: win.maxAngular(),
     windowMaxLinear: win.maxLinear(),
     maxAngularVelocity: 0.6,
-    maxLinearVelocity: 0.5,
+    maxLinearVelocity: 2.5,
     msSinceDue: 0,
     maxWaitMs: 4000,
   }); // 'capture' (calm)

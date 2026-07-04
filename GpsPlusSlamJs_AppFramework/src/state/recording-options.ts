@@ -44,9 +44,16 @@ export interface RecordingOptionsInput {
  * feature); Stage C + the WebXR-consistency gate stay experimental (default
  * OFF) until the §6a field-data matrix is in.
  *
- * On-device caveat: the resulting `gpsData` actions persist into the recording,
- * so a replay re-enables them. Record §6a field-calibration sets with
- * `coldStartOverride` OFF so the captured compass behaviour is unmodified.
+ * On-device caveat: the resulting `gpsData` opt-in actions persist into the
+ * recording, so the DEFAULT `replayAll` re-enables them. This does NOT modify the
+ * raw recorded stream (`rawAbsoluteOrientation`, GPS, odometry) — only the
+ * *derived* alignment — so an investigation that re-solves from the raw
+ * observations under a chosen `AlignmentConfig` (`recomputeAlignment`) is
+ * unaffected by the capture-time flag state. Turning the flags off during capture
+ * only matters if you want the LIVE app to behave as the GPS-only baseline; it is
+ * not required for clean §6a analysis data. See
+ * `GpsPlusSlamJs_Docs/docs/2026-06-26-stage0-field-collection-and-enablement.md`
+ * (2026-07-01 update).
  */
 export interface CompassDebugOptions {
   /** Stage 0 — cold-start compass yaw override (`setColdStartOverrideEnabled`). Default ON. */
@@ -93,11 +100,12 @@ export interface ArCrashIsolationOptions {
 export interface DepthCaptureOptions {
   /** Whether to capture depth samples. Default: true */
   enabled: boolean;
-  /** Interval between samples in milliseconds. Default: 1000 */
+  /** Interval between samples in milliseconds. Default: 500 (FAST-reconstruction tuning, 2026-07-01). */
   intervalMs: number;
   /**
-   * Grid size (N×N points per sample). Default: 16 — dense enough to
-   * populate the AR-space occupancy grid (2026-06-11 port plan §1).
+   * Grid size (N×N points per sample). Default: 32 (FAST-reconstruction
+   * tuning, 2026-07-01) — dense enough to populate the AR-space occupancy
+   * grid (2026-06-11 port plan §1).
    */
   gridSize: number;
   /**
@@ -149,6 +157,48 @@ export interface ImageCaptureOptions {
  * so they also apply when replaying an existing recording, letting the same
  * session be re-quantized at a different resolution.
  */
+/**
+ * Mesher strategy for the **persistent occluder** mesh, exposed as a recorder
+ * setting (2026-06-30 occluder-tuning, F2/F2b) so the two surface-hugging
+ * approaches can be A/B-tested on-device against the blocky baseline:
+ * - `'greedy'` — blocky greedy cubes (the existing default; fewest triangles).
+ * - `'corner-fit'` — cubes with corners pulled to the measured centroids
+ *   (surface-hugging **and** watertight).
+ * - `'smooth'` — surface nets: smoothest, hugs the measured surface, but an open
+ *   sheet over thin features.
+ *
+ * Maps directly onto `meshOccupiedCells` / `OcclusionMesh` `MeshMode` (a subset).
+ * `'per-face'` is intentionally not offered (same shape as `'greedy'`, more
+ * triangles — no on-device value).
+ */
+const OCCLUDER_MESH_MODES = ['greedy', 'corner-fit', 'smooth'] as const;
+export type OccluderMeshMode = (typeof OCCLUDER_MESH_MODES)[number];
+
+/**
+ * Debug-visualization style for the **persistent occluder** mesh (2026-07-02
+ * debug-viz-styles plan) — which visible debug skin(s) `OcclusionMesh` renders
+ * on top of the invisible depth-only occluder:
+ * - `'off'` — no debug rendering (the shipped default; occlusion is invisible).
+ * - `'matcap'` — the original shiny semi-transparent cyan skin.
+ * - `'depth-shaded'` — matcap + camera-distance fade + white fresnel rim, so
+ *   overlapping near/far surfaces read as separate shells.
+ * - `'wireframe'` — the raw triangulation as GL lines (mesh-structure
+ *   inspection: triangle density, mesher seams, degenerate spots).
+ * - `'depth-shaded-wireframe'` — both of the above composed.
+ *
+ * Values array module-private (validation only; the settings `<select>`
+ * options are hardcoded in the recorder's `index.html`), type exported —
+ * mirroring `OCCLUDER_MESH_MODES` / {@link OccluderMeshMode}.
+ */
+const OCCLUDER_DEBUG_STYLES = [
+  'off',
+  'matcap',
+  'depth-shaded',
+  'wireframe',
+  'depth-shaded-wireframe',
+] as const;
+export type OccluderDebugStyle = (typeof OCCLUDER_DEBUG_STYLES)[number];
+
 export interface OccupancyOptions {
   /**
    * Voxel edge length in metres. Drives the occupancy-grid quantization, the
@@ -173,6 +223,84 @@ export interface OccupancyOptions {
    * `GpsPlusSlamJs_Docs/docs/2026-06-22-occupancy-grid-behind-surface-noise-plan.md`.
    */
   minConfidence: number;
+  /**
+   * Render a **persistent depth-only occlusion mesh** of the occupancy grid:
+   * the grid's occupied cells are meshed (`meshOccupiedCells`) and drawn
+   * invisible-but-depth-writing under `arWorldGroup`, so real geometry the
+   * camera saw earlier hides virtual objects placed behind it — including
+   * out-of-view surfaces a live depth occluder cannot remember. Default
+   * **true** (since 2026-07-01): the Web-Worker mesh offload removed the
+   * per-refresh render stall that was the reason to keep it opt-in, so the
+   * remembered occluder ships on by the default `'smooth'` mesher. Read once when
+   * the mesh is wired (Enter-AR / replay load), like the other occupancy knobs.
+   * See `GpsPlusSlamJs_Docs/docs/2026-06-13-occupancy-mesh-options-plan.md` and
+   * `GpsPlusSlamJs_Docs/docs/2026-07-01-occluder-worker-and-chunked-remesh-plan.md`.
+   *
+   * **Migration:** this field replaces the former `occlusionMeshEnabled`
+   * boolean — `validateOccupancyOptions` maps a persisted
+   * `occlusionMeshEnabled === true` onto `persistentOcclusion` (see that
+   * function and `2026-06-29-occupancy-mesh-followups.md`).
+   */
+  persistentOcclusion: boolean;
+  /**
+   * Enable the **live CPU-depth occluder** — a per-frame depth occluder that
+   * hides virtual content behind the real surface the camera sees *right now*,
+   * sharp and registration-free (no out-of-view memory). It composes with
+   * {@link persistentOcclusion}: both can be on (the live occluder wins where
+   * this frame has depth, the persistent mesh fills out-of-view / depth holes —
+   * `2026-06-14-webxr-depth-occlusion-plan.md` §5). Requires the
+   * `requestDepthOcclusion` session feature so `cpu-optimized` depth is
+   * negotiated even without depth recording. **Live-AR only** — replay has no
+   * live depth stream, so this flag is a no-op there (persistent still applies).
+   * Default **false**: the live occluder's on-device occlusion quality is still
+   * device-gated/unverified. Read once when the AR session is wired (Enter-AR).
+   */
+  liveOcclusion: boolean;
+  /**
+   * Which **visible debug skin(s)** render the persistent occluder mesh (see
+   * {@link OccluderDebugStyle}) so its shape/structure can be judged on-device.
+   * All styles are additive overlays — the invisible depth-only mesh keeps
+   * writing depth unchanged, so occlusion is identical in every style. Only has
+   * a visible effect when {@link persistentOcclusion} is on (it is that
+   * occluder's mesh); any other value is a harmless no-op. Default **`'off'`**.
+   * Read once when the mesh is wired (Enter-AR / replay load), like the other
+   * occupancy knobs. See
+   * `GpsPlusSlamJs_Docs/docs/2026-07-02-occluder-debug-viz-styles-plan.md` and
+   * `GpsPlusSlamJs_Docs/docs/2026-06-29-occlusion-debug-viz-and-live-occluder-user-feedback.md`.
+   *
+   * **Migration:** this field replaces the former `occluderDebugViz` boolean —
+   * `validateOccupancyOptions` maps a persisted `occluderDebugViz: true` onto
+   * `'matcap'` (the skin the boolean used to enable) when this field is absent,
+   * mirroring the `occlusionMeshEnabled` → {@link persistentOcclusion}
+   * migration.
+   */
+  occluderDebugStyle: OccluderDebugStyle;
+  /**
+   * Which mesher builds the **persistent occluder** mesh (see
+   * {@link OccluderMeshMode}). Default `'smooth'` (since 2026-07-01) — Naive
+   * Surface Nets, the smoothest and lightest mesh. Switch to `'greedy'` (blocky
+   * cubes, watertight) or `'corner-fit'` (surface-hugging + watertight) if the
+   * smooth mesh's open concave seams leak occlusion in practice (combine with
+   * {@link occluderDebugStyle} to actually *see* the mesh shape). Only has an
+   * effect when {@link persistentOcclusion} is on. Read once when the mesh is
+   * wired (Enter-AR / replay load), like the other occupancy knobs. See
+   * `GpsPlusSlamJs_Docs/docs/2026-06-30-occluder-tuning-followups.md`.
+   */
+  occluderMeshMode: OccluderMeshMode;
+  /**
+   * Camera-local window for the **persistent occluder** snapshot (Step 2 of
+   * the 2026-07-03 long-session fps plan): each re-mesh reads only the
+   * occupied cells within this many meters of the camera
+   * (`OccupancyGrid.getOccupiedCellsWithinFlat`), so snapshot/pack/mesh cost
+   * is bounded by the neighbourhood instead of the whole session. Default
+   * **25 m** — a 15 cm voxel at 25 m subtends ~0.3°, so occlusion errors
+   * beyond that are imperceptible. `0` = unbounded (the pre-Step-2
+   * behaviour, the safe fallback). The grid forgets nothing: walking back
+   * re-meshes far geometry from memory — exactly the persistent-grid intent.
+   * Only has an effect when {@link persistentOcclusion} is on. Read once at
+   * Enter-AR / replay load like the other occupancy knobs.
+   */
+  occluderRadiusM: number;
 }
 
 /**
@@ -195,6 +323,17 @@ export interface FrameTileDisplayOptions {
    * `images.resolutionDivisor`.
    */
   divisor: number;
+  /**
+   * FIFO cap on the **live** frame-tile planes (Step 4 of the 2026-07-03
+   * long-session fps plan): adding a tile over the cap removes + disposes the
+   * oldest, bounding draw calls / GPU texture memory / scene-graph size for
+   * arbitrarily long sessions while keeping the recent-path breadcrumb.
+   * `0` = unlimited. Default 100 (a ~5-min walk captures 112–145 frames, so
+   * the cap binds on real walks). **Live only** (2026-07-03 interview): in
+   * replay the tiles audit coverage of the full recorded path, so the replay
+   * wiring stays uncapped regardless of this value.
+   */
+  maxTiles: number;
 }
 
 /**
@@ -203,12 +342,15 @@ export interface FrameTileDisplayOptions {
  *
  * These gate **only what is drawn live during recording** — they never change
  * what is captured (frame blobs, depth samples, occupancy data, GPS events all
- * continue regardless) and they never affect replay (where reviewing the
- * captured overlays is the whole point). Read once at Enter-AR: toggling
- * mid-session applies on the next Enter-AR, not retroactively.
+ * continue regardless) and, with one exception, they never affect replay
+ * (where reviewing the captured overlays is the whole point). Read once at
+ * Enter-AR: toggling mid-session applies on the next Enter-AR, not
+ * retroactively.
  *
- * All four default ON, so adding this group is purely additive — every overlay
- * still renders until the operator opts out.
+ * The debug overlays default ON, so the group is purely additive — every
+ * overlay still renders until the operator opts out. The exception on both
+ * counts is {@link VisualizationOptions.statsOverlay}: a perf-measurement tool
+ * that defaults OFF and, when on, also runs in replay (see its docs).
  */
 export interface VisualizationOptions {
   /** Live frame-tile planes (`FrameTileVisualizer`). Default: true */
@@ -219,6 +361,24 @@ export interface VisualizationOptions {
   gpsAlignmentMarkers: boolean;
   /** N/E/S/W compass orientation cubes (`createGpsCompassCubes`). Default: true */
   compassCubes: boolean;
+  /**
+   * Rotate the live in-AR minimap so the user's view direction always points
+   * up/forward (heading-up) instead of fixed north-up. Unlike the other flags
+   * in this group this is a map-orientation preference, not a show/hide — but it
+   * shares their live-only semantics (read at Enter-AR, never affects replay).
+   * Default: true. See the 2026-06-29 heading-up plan.
+   */
+  headingUpMap: boolean;
+  /**
+   * Performance stats overlay (Stats.js: FPS / frame ms / MB panels) for
+   * long-session fps attribution (2026-07-03 long-session fps plan §0).
+   * Two exceptions to this group's rules: it is a debug tool, so it defaults
+   * **OFF** (must not cost the default path), and unlike the live-only
+   * overlays it also runs in **replay** (frame time matters there too).
+   * In immersive AR it composites via the dom-overlay feature, so it is
+   * invisible when `arCrashIsolation.enableDomOverlay` is off.
+   */
+  statsOverlay: boolean;
 }
 
 /**
@@ -289,8 +449,10 @@ export const STORAGE_KEY = 'gps-plus-slam-recorder-options';
 export const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
   depth: {
     enabled: true,
-    intervalMs: 1000, // 1 sample per second
-    gridSize: 16, // 16×16 = 256 points per sample (occupancy-grid density)
+    // Tuned for FAST mesh reconstruction (2026-07-01 param-sweep on a real
+    // recording; see recording-options.ts.md):
+    intervalMs: 500, // 2 samples per second — denser temporal sampling
+    gridSize: 32, // 32×32 = 1024 points per sample — confirms cells fastest (was 24; slider max raised to 64 for on-device experimentation)
     rgb: true, // RGB voxel coloring (Iter 8)
   },
   images: {
@@ -314,13 +476,20 @@ export const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
     applyChromiumProjectionLayerWorkaround: true,
   },
   occupancy: {
-    cellSizeM: 0.15, // 15 cm voxels — matches OccupancyGrid's own default (Unity parity)
-    minConfidence: 3, // ≥3 observations to render a voxel — filters single-frame depth noise (1 = legacy/unfiltered)
+    cellSizeM: 0.15, // 15 cm voxels — matches OccupancyGrid's own default (Unity parity); balances detail vs speed
+    minConfidence: 3, // ≥3 observations to render a voxel — the FAST-reconstruction noise floor (2026-07-01; ~1.5s dwell before a surface meshes vs 2.5s at 5, +25% early coverage; 1 = legacy/unfiltered)
+    persistentOcclusion: true, // persistent depth-only mesh occluder ON by default (2026-07-01: Web-Worker offload removed the render stall — see 2026-07-01-occluder-worker-and-chunked-remesh-plan.md)
+    liveOcclusion: false, // live CPU-depth occluder OFF by default (device-gated quality; replay no-op)
+    occluderDebugStyle: 'off', // debug visualization of the persistent occluder mesh OFF by default (occlusion is invisible in normal use)
+    occluderMeshMode: 'smooth', // persistent-occluder mesher: Naive Surface Nets by default (smoothest/lightest); 'greedy' = blocky cubes (watertight), 'corner-fit' = surface-hugging + watertight
+    occluderRadiusM: 25, // camera-local occluder window (2026-07-03 fps plan Step 2); 0 = unbounded
   },
   frameTileDisplay: {
     // Half-resolution display texture by default (D7): a noticeable per-tile
     // memory saving with little perceptual cost on the small floating tiles.
     divisor: 2,
+    // Live FIFO tile cap (2026-07-03 fps plan Step 4); 0 = unlimited.
+    maxTiles: 100,
   },
   visualization: {
     // All overlays ON so the group is purely additive (DB-1b) — no behaviour
@@ -329,6 +498,11 @@ export const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
     occupancyCubes: true,
     gpsAlignmentMarkers: true,
     compassCubes: true,
+    // Heading-up minimap ON by default in live (2026-06-29 user decision).
+    headingUpMap: true,
+    // Perf stats overlay OFF by default — a debug tool must not cost the
+    // default path (2026-07-03 long-session fps plan §0).
+    statsOverlay: false,
   },
   qr: {
     // OFF by default (§0): QR capture/detection is opt-in so existing
@@ -352,10 +526,12 @@ export const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
 /** Validation constraints for depth options */
 export const DEPTH_CONSTRAINTS = {
   intervalMs: { min: 500, max: 5000, step: 100 },
-  // Max raised 10 → 32 with the occupancy-grid work: 32×32 = 1024
-  // getDepthInMeters reads per sample is the ceiling until the per-frame
-  // cost is measured on-device (port plan Iter 6 field verification).
-  gridSize: { min: 2, max: 32, step: 1 },
+  // Max raised 32 → 64 (2026-07-01) for on-device experimentation with faster
+  // mesh reconstruction: 64×64 = 4096 getDepthInMeters reads per sample (4× the
+  // 32² default). High values trade per-sample depth-readback cost + grid growth
+  // for faster cell confirmation — measure the per-frame cost on-device before
+  // adopting a value above the 32 default.
+  gridSize: { min: 2, max: 64, step: 1 },
 } as const;
 
 /** Validation constraints for image options */
@@ -419,6 +595,10 @@ export const QUALITY_FILTER_CONSTRAINTS = {
 export const OCCUPANCY_CONSTRAINTS = {
   cellSizeM: { min: 0.01, max: 0.2, step: 0.01 },
   minConfidence: { min: 1, max: 10, step: 1 },
+  // Camera-local occluder window: 0 = unbounded; 200 m is far past any
+  // useful mobile-AR occlusion distance but keeps a corrupt stored value
+  // from effectively disabling the bound by accident.
+  occluderRadiusM: { min: 0, max: 200, step: 5 },
 } as const;
 
 /**
@@ -431,6 +611,10 @@ export const OCCUPANCY_CONSTRAINTS = {
  */
 export const FRAME_TILE_DISPLAY_CONSTRAINTS = {
   divisor: { min: 1, max: 8, step: 1 },
+  // Live tile cap: 0 = unlimited; 2000 is far past any sane on-device tile
+  // budget (each tile is one draw call + one texture) but keeps a corrupt
+  // stored value from making the cap effectively unbounded by accident.
+  maxTiles: { min: 0, max: 2000, step: 10 },
 } as const;
 
 /**
@@ -535,6 +719,16 @@ export function validateVisualizationOptions(
       typeof options.compassCubes === 'boolean'
         ? options.compassCubes
         : defaults.compassCubes,
+    headingUpMap:
+      typeof options.headingUpMap === 'boolean'
+        ? options.headingUpMap
+        : defaults.headingUpMap,
+    // Same boolean-or-default policy, but the default is OFF (debug tool) — a
+    // corrupt value must never switch the overlay on by itself.
+    statsOverlay:
+      typeof options.statsOverlay === 'boolean'
+        ? options.statsOverlay
+        : defaults.statsOverlay,
   };
 }
 
@@ -743,11 +937,77 @@ export function validateImageOptions(
  * `RangeError` on a non-finite cell size, and `clamp(NaN, …)` would otherwise
  * pass `NaN` straight through (it is `typeof 'number'`). Falling back to the
  * default keeps a corrupted stored value from crashing grid construction.
+ *
+ * **Backward-compat migration:** the occlusion options were a single
+ * `occlusionMeshEnabled` boolean before 2026-06-29; they are now the two
+ * composable booleans `persistentOcclusion` + `liveOcclusion`. A persisted
+ * object that predates the split carries only the legacy field, so when the new
+ * `persistentOcclusion` is absent we read `occlusionMeshEnabled` and map
+ * `true → persistentOcclusion: true` (the old mesh occluder is the persistent
+ * one); the legacy shape never enabled a live occluder, so `liveOcclusion`
+ * stays at its default. A present new field always wins over the legacy one.
+ * See `2026-06-29-occupancy-mesh-followups.md`.
  */
+/**
+ * Resolve `persistentOcclusion` with legacy migration. A **present** new field
+ * always wins over the legacy `occlusionMeshEnabled` — even when its value is
+ * invalid: a present-but-corrupt value falls back to the default, never to the
+ * legacy flag, so corrupted saved options can't silently flip the occluder
+ * against the "new field wins" contract. Only an **absent** new field migrates
+ * the legacy boolean (`true → persistent on`); else the default.
+ */
+function resolvePersistentOcclusion(
+  options: Partial<OccupancyOptions>,
+  legacyOcclusionMeshEnabled: unknown,
+  defaultValue: boolean
+): boolean {
+  if ('persistentOcclusion' in options) {
+    return typeof options.persistentOcclusion === 'boolean'
+      ? options.persistentOcclusion
+      : defaultValue;
+  }
+  return typeof legacyOcclusionMeshEnabled === 'boolean'
+    ? legacyOcclusionMeshEnabled
+    : defaultValue;
+}
+
+/**
+ * Resolve `occluderDebugStyle` with legacy migration, following the same
+ * contract as {@link resolvePersistentOcclusion}: a **present** new field
+ * always wins over the legacy `occluderDebugViz` boolean — even when its value
+ * is unknown/corrupt it falls back to the default (`'off'`), never to the
+ * legacy flag, so corrupted saved options can't silently turn a debug render
+ * on. Only an **absent** new field migrates the legacy boolean
+ * (`true → 'matcap'`, the skin the boolean used to enable); else the default.
+ */
+function resolveOccluderDebugStyle(
+  options: Partial<OccupancyOptions>,
+  legacyOccluderDebugViz: unknown,
+  defaultValue: OccluderDebugStyle
+): OccluderDebugStyle {
+  if ('occluderDebugStyle' in options) {
+    return (OCCLUDER_DEBUG_STYLES as readonly unknown[]).includes(
+      options.occluderDebugStyle
+    )
+      ? (options.occluderDebugStyle as OccluderDebugStyle)
+      : defaultValue;
+  }
+  if (typeof legacyOccluderDebugViz === 'boolean') {
+    return legacyOccluderDebugViz ? 'matcap' : 'off';
+  }
+  return defaultValue;
+}
+
 export function validateOccupancyOptions(
   options: Partial<OccupancyOptions>
 ): OccupancyOptions {
   const defaults = DEFAULT_RECORDING_OPTIONS.occupancy;
+  // Legacy fields (removed from OccupancyOptions): only read for migration.
+  const legacyOcclusionMeshEnabled = (
+    options as { occlusionMeshEnabled?: unknown }
+  ).occlusionMeshEnabled;
+  const legacyOccluderDebugViz = (options as { occluderDebugViz?: unknown })
+    .occluderDebugViz;
   return {
     cellSizeM: clamp(
       typeof options.cellSizeM === 'number' &&
@@ -767,6 +1027,44 @@ export function validateOccupancyOptions(
         : defaults.minConfidence,
       OCCUPANCY_CONSTRAINTS.minConfidence.min,
       OCCUPANCY_CONSTRAINTS.minConfidence.max
+    ),
+    // Present new field wins (even if invalid → default); absent → migrate the
+    // legacy boolean. See resolvePersistentOcclusion.
+    persistentOcclusion: resolvePersistentOcclusion(
+      options,
+      legacyOcclusionMeshEnabled,
+      defaults.persistentOcclusion
+    ),
+    // The legacy single-toggle never drove a live occluder, so there is nothing
+    // to migrate here — boolean-or-default only.
+    liveOcclusion:
+      typeof options.liveOcclusion === 'boolean'
+        ? options.liveOcclusion
+        : defaults.liveOcclusion,
+    // Present new field wins (unknown value → default 'off'); absent → migrate
+    // the legacy occluderDebugViz boolean. See resolveOccluderDebugStyle.
+    occluderDebugStyle: resolveOccluderDebugStyle(
+      options,
+      legacyOccluderDebugViz,
+      defaults.occluderDebugStyle
+    ),
+    // Enum-or-default: only one of the known mesher modes is accepted; anything
+    // else (corrupt/legacy/missing) falls back to the default blocky cubes.
+    occluderMeshMode: (OCCLUDER_MESH_MODES as readonly string[]).includes(
+      options.occluderMeshMode as string
+    )
+      ? (options.occluderMeshMode as OccluderMeshMode)
+      : defaults.occluderMeshMode,
+    // Number-or-default; 0 stays 0 (the explicit "unbounded"). Rounded to
+    // whole meters — the grid throws on invalid radii, so garbage must never
+    // pass through.
+    occluderRadiusM: clamp(
+      typeof options.occluderRadiusM === 'number' &&
+        Number.isFinite(options.occluderRadiusM)
+        ? Math.round(options.occluderRadiusM)
+        : defaults.occluderRadiusM,
+      OCCUPANCY_CONSTRAINTS.occluderRadiusM.min,
+      OCCUPANCY_CONSTRAINTS.occluderRadiusM.max
     ),
   };
 }
@@ -789,6 +1087,14 @@ export function validateFrameTileDisplayOptions(
         : defaults.divisor,
       FRAME_TILE_DISPLAY_CONSTRAINTS.divisor.min,
       FRAME_TILE_DISPLAY_CONSTRAINTS.divisor.max
+    ),
+    // Same number-or-default policy; 0 stays 0 (the explicit "unlimited").
+    maxTiles: clamp(
+      typeof options.maxTiles === 'number' && Number.isFinite(options.maxTiles)
+        ? Math.round(options.maxTiles)
+        : defaults.maxTiles,
+      FRAME_TILE_DISPLAY_CONSTRAINTS.maxTiles.min,
+      FRAME_TILE_DISPLAY_CONSTRAINTS.maxTiles.max
     ),
   };
 }

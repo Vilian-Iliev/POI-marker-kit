@@ -49,8 +49,17 @@ import { wireFrameTileSubscribers } from '../visualization/wire-frame-tile-subsc
 import { OccupancyGrid } from 'gps-plus-slam-app-framework/ar/occupancy-grid';
 import { loadRecordingOptions } from 'gps-plus-slam-app-framework/state/recording-options';
 import { OccupancyCubesVisualizer } from '../visualization/occupancy-cubes-visualizer';
+import {
+  createOccluderSink,
+  type OccluderSink,
+  type OccluderSinkHandle,
+} from '../visualization/occluder-sink';
 import { wireOccupancyGridSubscribers } from '../visualization/wire-occupancy-grid-subscribers';
 import { createZipFrameBlobSource } from '../storage/zip-frame-blob-source';
+import {
+  createStatsOverlay,
+  type StatsOverlayHandle,
+} from '../ui/stats-overlay';
 import * as THREE from 'three';
 
 const log = createLogger('ReplayMode');
@@ -130,9 +139,23 @@ export async function startReplayMode(
   const actions: ReplayAction[] = recording.actions.map((e) => e.action);
   log.info(`Loaded ${actions.length} actions from zip`);
 
-  // Create store with NullStorageBackend (no persistence side effects)
+  // Create store with NullStorageBackend (no persistence side effects).
+  //
+  // Compass opt-ins are DISABLED for replay: the framework would otherwise
+  // re-derive them from its defaults (cold-start override defaults ON) and
+  // auto-dispatch `setColdStartOverrideEnabled(true)` on the first replayed
+  // `setZeroPos`. But only ENABLED opt-ins are persisted as actions, so a
+  // recording captured with the override OFF (e.g. a §6a calibration capture)
+  // carries no opt-in action — re-deriving the default would enable an override
+  // the session was recorded WITHOUT. Replay's source of truth is the recorded
+  // action stream alone (a session recorded WITH the override on already carries
+  // the `setColdStartOverrideEnabled(true)` action, which replay re-applies), so
+  // disabling the auto-apply makes both cases replay faithfully.
   const store = createRecorderStore({
     storageBackend: new NullStorageBackend(),
+    enableCompassColdStartOverride: false,
+    enableCompassRotationPrior: false,
+    enableCompassWebXRConsistency: false,
   });
 
   // Initialize Three.js replay scene (no WebXR)
@@ -186,6 +209,9 @@ export async function startReplayMode(
   // Best-effort like the frame tiles above.
   let unsubscribeOccupancyGrid: (() => void) | null = null;
   let occupancyCubesVisualizer: OccupancyCubesVisualizer | null = null;
+  // Persistent occluder handle (occluder-sink.ts — the wiring shared with the
+  // live path); dispose() releases mesh + worker and no-ops the sink callbacks.
+  let occluderSinkHandle: OccluderSinkHandle | null = null;
   try {
     // Re-derive the grid from the recorded depth points at the user's current
     // voxel size (recording-options `occupancy.cellSizeM`, clamped 1–20 cm).
@@ -204,18 +230,43 @@ export async function startReplayMode(
       replaySceneState.arWorldGroup,
       { minObservations: occupancyOptions.minConfidence }
     );
+    // Persistent depth-only occluder (ON by default), re-quantizable per
+    // replay like the cubes — the shared factory (occluder-sink.ts, one wiring
+    // for live AND replay) reads the mesher/debug styles, radius and the same
+    // minConfidence floor from the options group. (Live occlusion is
+    // live-AR-only — replay has no live depth stream — so only the persistent
+    // flag is honoured here.)
+    let occluderSink: OccluderSink | undefined;
+    if (occupancyOptions.persistentOcclusion) {
+      occluderSinkHandle = createOccluderSink(
+        replaySceneState.arWorldGroup,
+        occupancyOptions
+      );
+      occluderSink = occluderSinkHandle.sink;
+    }
     unsubscribeOccupancyGrid = wireOccupancyGridSubscribers({
       storeRef: createStoreRef(store),
       grid: occupancyGrid,
       visualizer: occupancyCubesVisualizer,
+      occluder: occluderSink,
       // Coalesce the replay burst to the user's current `depth.intervalMs`
       // rather than a fixed 1 s — re-quantization parity with cellSizeM /
       // minConfidence above (the same global setting re-read per replay),
       // NOT the recording's original capture cadence (2026-06-22 cube
       // cadence/locality plan §2).
       refreshIntervalMs: replayOptions.depth.intervalMs,
+      // Camera-relative windows (cubes always; occluder when radius > 0)
+      // must re-render a settled grid when the replayed camera moves — ε =
+      // one chunk edge (16 cells). Step 2 revision-guard fix, parity with
+      // main.ts.
+      refreshOnCameraMoveM: 16 * occupancyOptions.cellSizeM,
       onError: (err) => {
         log.warn('Occupancy grid update failed during replay', err);
+      },
+      // Cells-over-time telemetry (Step 0 of the 2026-07-03 long-session fps
+      // plan) — replay parity with the live wiring in main.ts.
+      onGridSize: (cells) => {
+        log.info(`[OccupancyGrid] ${cells} cells`);
       },
     });
   } catch (err) {
@@ -223,6 +274,28 @@ export async function startReplayMode(
       'Occupancy grid wiring skipped; replay continues without depth cubes',
       err
     );
+  }
+
+  // Perf stats overlay (visualization.statsOverlay — Step 0 of the 2026-07-03
+  // long-session fps plan; the one visualization toggle that ALSO applies to
+  // replay, since replay frame time matters for the same investigation). The
+  // replay scene's render loop is module-private in the framework, so the
+  // panels are advanced by their own rAF loop — rAF fires once per browser
+  // frame, so the measured cadence equals the replay render cadence.
+  // Best-effort like the visualizers above.
+  let statsOverlay: StatsOverlayHandle | null = null;
+  let statsRafId: number | null = null;
+  try {
+    if (loadRecordingOptions().visualization.statsOverlay) {
+      statsOverlay = createStatsOverlay(config.container);
+      const statsTick = (): void => {
+        statsOverlay?.update();
+        statsRafId = requestAnimationFrame(statsTick);
+      };
+      statsRafId = requestAnimationFrame(statsTick);
+    }
+  } catch (err) {
+    log.warn('Stats overlay skipped; replay continues without it', err);
   }
 
   // Get the alignment lerper (Issue 4) — store subscribers route alignment
@@ -355,6 +428,13 @@ export async function startReplayMode(
       frameTileVisualizer?.dispose();
       unsubscribeOccupancyGrid?.();
       occupancyCubesVisualizer?.dispose();
+      occluderSinkHandle?.dispose();
+      occluderSinkHandle = null;
+      if (statsRafId !== null) {
+        cancelAnimationFrame(statsRafId);
+        statsRafId = null;
+      }
+      statsOverlay?.dispose();
       disposeReplayScene();
       log.info('Replay mode disposed');
     },

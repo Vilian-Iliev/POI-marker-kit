@@ -41,7 +41,15 @@ const {
   mockCreateGpsCompassCubes,
   mockGpsEventVisualizer,
   mockRecordingOptions,
+  mockCreateStatsOverlay,
+  mockStatsOverlayInstance,
 } = vi.hoisted(() => {
+  const mockStatsOverlayInstance = {
+    dom: {} as HTMLElement,
+    panelCount: 3,
+    update: vi.fn(),
+    dispose: vi.fn(),
+  };
   const mockFrameTileVisualizerInstance = {
     addTile: vi.fn(),
     clear: vi.fn(),
@@ -92,6 +100,8 @@ const {
       }
     ),
     occupancyDisposers,
+    mockCreateStatsOverlay: vi.fn(() => mockStatsOverlayInstance),
+    mockStatsOverlayInstance,
     mockCreateGpsCompassCubes: vi.fn(),
     mockGpsEventVisualizer: {
       setVisible: vi.fn(),
@@ -106,12 +116,13 @@ const {
       images: { enabled: false, intervalMs: 1000, quality: 0.8 },
       depth: { enabled: false, intervalMs: 1000 },
       occupancy: { cellSizeM: 0.15, minConfidence: 3 },
-      frameTileDisplay: { divisor: 2 },
+      frameTileDisplay: { divisor: 2, maxTiles: 100 },
       visualization: {
         frameTiles: true,
         occupancyCubes: true,
         gpsAlignmentMarkers: true,
         compassCubes: true,
+        statsOverlay: false,
       },
     },
   };
@@ -180,6 +191,7 @@ vi.mock('gps-plus-slam-app-framework/ar/webxr-session', () => ({
   setTrackingCallbacks: vi.fn(),
   setTrackingRecoveredCallback: vi.fn(),
   setTrackingStore: vi.fn(),
+  setSessionEndCallback: vi.fn(),
   getScene: mockGetScene,
   getCamera: mockGetCamera,
   getArWorldGroup: mockGetArWorldGroup,
@@ -255,6 +267,7 @@ vi.mock('./ui/ref-point-picker', () => ({
 }));
 vi.mock('./ui/navigation', () => ({
   initNavigation: vi.fn(),
+  getCurrentScreen: vi.fn(() => 'setup'),
   enableBeforeUnloadWarning: vi.fn(),
   disableBeforeUnloadWarning: vi.fn(),
   pushScreenState: vi.fn(),
@@ -429,6 +442,9 @@ vi.mock('gps-plus-slam-app-framework', () => ({
 vi.mock('./ui/hud-tracking-quality-subscriber', () => ({
   subscribeHudToTrackingQuality: vi.fn(() => vi.fn()),
 }));
+vi.mock('./ui/stats-overlay', () => ({
+  createStatsOverlay: mockCreateStatsOverlay,
+}));
 vi.mock('./replay/replay-handlers', () => ({
   createReplayHandlers: vi.fn().mockReturnValue({
     handleStartReplay: vi.fn(),
@@ -482,12 +498,15 @@ describe('Visualization overlay toggles in live AR (Finding B)', () => {
     vi.clearAllMocks();
     frameTileDisposers.length = 0;
     occupancyDisposers.length = 0;
-    // Reset to the additive default (all overlays ON) before each test.
+    mockRecordingOptions.frameTileDisplay.maxTiles = 100;
+    // Reset to the additive default (all overlays ON, stats OFF) before each
+    // test — statsOverlay is the group's one off-by-default field.
     mockRecordingOptions.visualization = {
       frameTiles: true,
       occupancyCubes: true,
       gpsAlignmentMarkers: true,
       compassCubes: true,
+      statsOverlay: false,
     };
     document.body.innerHTML = `
       <div id="app"></div>
@@ -529,6 +548,19 @@ describe('Visualization overlay toggles in live AR (Finding B)', () => {
       expect(mockFrameTileVisualizerCtor).toHaveBeenCalledTimes(1);
       expect(mockWireFrameTileSubscribers).toHaveBeenCalledTimes(1);
     });
+
+    it('passes the LIVE-only frameTileDisplay.maxTiles cap to the visualizer (Step 4, 2026-07-03 fps plan)', async () => {
+      // Why: the FIFO tile cap is a live-session bound; the replay wiring
+      // deliberately omits it (asserted in replay-mode.test.ts). This pins
+      // that the live constructor actually receives the stored setting.
+      mockRecordingOptions.frameTileDisplay.maxTiles = 42;
+      await handleEnterARForTesting();
+
+      expect(mockFrameTileVisualizerCtor).toHaveBeenCalledWith(
+        expect.anything(),
+        { maxTiles: 42 }
+      );
+    });
   });
 
   describe('compassCubes toggle', () => {
@@ -560,6 +592,38 @@ describe('Visualization overlay toggles in live AR (Finding B)', () => {
       await handleEnterARForTesting();
 
       expect(mockGpsEventVisualizer.setVisible).toHaveBeenCalledWith(true);
+    });
+  });
+
+  describe('statsOverlay toggle (Step 0 of the 2026-07-03 long-session fps plan)', () => {
+    it('does NOT mount the stats overlay by default (off — debug tool)', async () => {
+      await handleEnterARForTesting();
+
+      expect(mockCreateStatsOverlay).not.toHaveBeenCalled();
+    });
+
+    it('mounts the stats overlay into the #app dom-overlay root when on', async () => {
+      mockRecordingOptions.visualization.statsOverlay = true;
+      await handleEnterARForTesting();
+
+      expect(mockCreateStatsOverlay).toHaveBeenCalledTimes(1);
+      // Must be (inside) the dom-overlay root or it cannot composite in AR.
+      expect(mockCreateStatsOverlay).toHaveBeenCalledWith(
+        document.getElementById('app')
+      );
+    });
+
+    it('disposes a previous cycle overlay on re-enter so panels never stack', async () => {
+      mockRecordingOptions.visualization.statsOverlay = true;
+      await handleEnterARForTesting();
+      expect(mockStatsOverlayInstance.dispose).not.toHaveBeenCalled();
+
+      // Second Enter-AR cycle (back-to-setup → Enter AR): the stale overlay
+      // must be disposed even when the toggle is now off.
+      mockRecordingOptions.visualization.statsOverlay = false;
+      await handleEnterARForTesting();
+      expect(mockStatsOverlayInstance.dispose).toHaveBeenCalledTimes(1);
+      expect(mockCreateStatsOverlay).toHaveBeenCalledTimes(1);
     });
   });
 

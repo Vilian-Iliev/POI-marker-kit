@@ -34,6 +34,7 @@ import {
   FRAME_TILE_DISPLAY_CONSTRAINTS,
   QR_CONSTRAINTS,
   type RecordingOptions,
+  type OccupancyOptions,
 } from './recording-options';
 
 // Mock localStorage
@@ -345,6 +346,43 @@ describe('recording-options', () => {
       expect(result).toEqual(DEFAULT_RECORDING_OPTIONS.occupancy);
     });
 
+    // occluderRadiusM (Step 2 of the 2026-07-03 long-session fps plan): the
+    // camera-local occluder window. Default 25 m (a 15 cm voxel at 25 m is
+    // ~0.3° — occlusion errors beyond that are imperceptible); 0 = unbounded
+    // (today's behaviour, the safe fallback). Feeds
+    // OccupancyGrid.getOccupiedCellsWithinFlat, which throws on invalid
+    // radii — so corrupt values must clamp/fall back here.
+    it('occluderRadiusM defaults to 25 and preserves valid values including 0 (unbounded)', () => {
+      expect(validateOccupancyOptions({}).occluderRadiusM).toBe(25);
+      expect(DEFAULT_RECORDING_OPTIONS.occupancy.occluderRadiusM).toBe(25);
+      expect(
+        validateOccupancyOptions({ occluderRadiusM: 50 }).occluderRadiusM
+      ).toBe(50);
+      expect(
+        validateOccupancyOptions({ occluderRadiusM: 0 }).occluderRadiusM
+      ).toBe(0);
+    });
+
+    it('occluderRadiusM clamps/rounds bad values and falls back to default for non-numbers', () => {
+      expect(
+        validateOccupancyOptions({ occluderRadiusM: -10 }).occluderRadiusM
+      ).toBe(0);
+      expect(
+        validateOccupancyOptions({ occluderRadiusM: 12.4 }).occluderRadiusM
+      ).toBe(12);
+      expect(
+        validateOccupancyOptions({ occluderRadiusM: 1e6 }).occluderRadiusM
+      ).toBe(OCCUPANCY_CONSTRAINTS.occluderRadiusM.max);
+      expect(
+        validateOccupancyOptions({ occluderRadiusM: NaN }).occluderRadiusM
+      ).toBe(25);
+      expect(
+        validateOccupancyOptions({
+          occluderRadiusM: 'far' as unknown as number,
+        }).occluderRadiusM
+      ).toBe(25);
+    });
+
     it('preserves a valid in-range cell size', () => {
       expect(validateOccupancyOptions({ cellSizeM: 0.05 }).cellSizeM).toBe(
         0.05
@@ -387,7 +425,10 @@ describe('recording-options', () => {
      * recorder setting (2026-06-22 behind-surface-noise plan). It is forwarded
      * to `getOccupiedCells(minObservations)`, which expects a positive integer,
      * so validation must round, clamp to 1–10, and reject garbage to the
-     * default (default 3, not 1 — the filter is on out of the box).
+     * default (default 3, not 1 — the filter is on out of the box; set to 3 in
+     * the 2026-07-01 fast-reconstruction tuning: the fastest noise floor that
+     * still suppresses behind-surface phantoms, ~1.5s dwell before a surface
+     * meshes vs 2.5s at 5).
      */
     it('defaults minConfidence to 3 for an empty object', () => {
       expect(validateOccupancyOptions({}).minConfidence).toBe(3);
@@ -426,6 +467,206 @@ describe('recording-options', () => {
           minConfidence: 'lots' as unknown as number,
         }).minConfidence
       ).toBe(DEFAULT_RECORDING_OPTIONS.occupancy.minConfidence);
+    });
+
+    /**
+     * Why these matter (2026-06-13-occupancy-mesh-options-plan.md +
+     * 2026-06-29-occupancy-mesh-followups.md +
+     * 2026-07-01-occluder-worker-and-chunked-remesh-plan.md): both occluders
+     * round-trip as booleans — a corrupted stored value must not silently switch
+     * either on. Since 2026-07-01 the **persistent** mesh occluder ships ON by
+     * default (Web-Worker offload removed the render stall; surface-nets mesher —
+     * see occluderMeshMode below); the **live** CPU-depth occluder stays OFF
+     * (still device-gated, replay no-op).
+     */
+    it('defaults persistentOcclusion to true and liveOcclusion to false for an empty object', () => {
+      const out = validateOccupancyOptions({});
+      expect(out.persistentOcclusion).toBe(true);
+      expect(out.liveOcclusion).toBe(false);
+    });
+
+    it('preserves boolean persistentOcclusion / liveOcclusion', () => {
+      const out = validateOccupancyOptions({
+        persistentOcclusion: true,
+        liveOcclusion: true,
+      });
+      expect(out.persistentOcclusion).toBe(true);
+      expect(out.liveOcclusion).toBe(true);
+    });
+
+    it('falls back to the default for non-boolean occlusion flags', () => {
+      const out = validateOccupancyOptions({
+        persistentOcclusion: 'yes' as unknown as boolean,
+        liveOcclusion: 1 as unknown as boolean,
+      });
+      expect(out.persistentOcclusion).toBe(
+        DEFAULT_RECORDING_OPTIONS.occupancy.persistentOcclusion
+      );
+      expect(out.liveOcclusion).toBe(
+        DEFAULT_RECORDING_OPTIONS.occupancy.liveOcclusion
+      );
+    });
+
+    /**
+     * Backward-compat migration (2026-06-29): the occlusion options were a
+     * single `occlusionMeshEnabled` boolean. A recording/options object persisted
+     * before the split carries only that legacy field; it must map onto the new
+     * `persistentOcclusion` (the old mesh occluder IS the persistent one) and
+     * must never silently enable the new live occluder.
+     */
+    it('migrates a legacy occlusionMeshEnabled=true to persistentOcclusion (live stays off)', () => {
+      const out = validateOccupancyOptions({
+        occlusionMeshEnabled: true,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.persistentOcclusion).toBe(true);
+      expect(out.liveOcclusion).toBe(false);
+    });
+
+    it('migrates a legacy occlusionMeshEnabled=false to both occluders off', () => {
+      const out = validateOccupancyOptions({
+        occlusionMeshEnabled: false,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.persistentOcclusion).toBe(false);
+      expect(out.liveOcclusion).toBe(false);
+    });
+
+    it('lets a present persistentOcclusion override a conflicting legacy occlusionMeshEnabled', () => {
+      const out = validateOccupancyOptions({
+        occlusionMeshEnabled: true,
+        persistentOcclusion: false,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.persistentOcclusion).toBe(false);
+    });
+
+    /**
+     * The JSDoc contract is "a present new field always wins over the legacy
+     * one" — that must hold even when the present new field is INVALID. A blob
+     * like `{ persistentOcclusion: 'bad', occlusionMeshEnabled: … }` (corrupt
+     * saved options) must resolve to the DEFAULT, not silently fall through to
+     * the legacy flag (which could flip the occluder on/off against the
+     * contract). Pick a legacy value opposite the default so the assertion
+     * discriminates regardless of what the default is.
+     */
+    it('ignores the legacy field when persistentOcclusion is present-but-invalid (new field wins → default)', () => {
+      const legacy = !DEFAULT_RECORDING_OPTIONS.occupancy.persistentOcclusion;
+      const out = validateOccupancyOptions({
+        persistentOcclusion: 'bad' as unknown as boolean,
+        occlusionMeshEnabled: legacy,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.persistentOcclusion).toBe(
+        DEFAULT_RECORDING_OPTIONS.occupancy.persistentOcclusion
+      );
+    });
+
+    /**
+     * Debug-visualization style (2026-07-02 debug-viz-styles plan): a 5-value
+     * enum replacing the former `occluderDebugViz` boolean — picks which visible
+     * debug skin(s) `OcclusionMesh` renders for the persistent occluder. Default
+     * `'off'`; an unknown/corrupt stored value must coerce to `'off'` (a debug
+     * render must never switch itself on), and a persisted legacy boolean must
+     * migrate (`true → 'matcap'`, the skin the boolean used to enable) exactly
+     * like the `occlusionMeshEnabled → persistentOcclusion` precedent — a
+     * present new field always wins over the legacy one, even when invalid.
+     */
+    it("defaults occluderDebugStyle to 'off' for an empty object", () => {
+      expect(validateOccupancyOptions({}).occluderDebugStyle).toBe('off');
+    });
+
+    it('preserves each known occluderDebugStyle', () => {
+      for (const style of [
+        'off',
+        'matcap',
+        'depth-shaded',
+        'wireframe',
+        'depth-shaded-wireframe',
+      ] as const) {
+        expect(
+          validateOccupancyOptions({ occluderDebugStyle: style })
+            .occluderDebugStyle
+        ).toBe(style);
+      }
+    });
+
+    it("coerces an unknown occluderDebugStyle to the default 'off'", () => {
+      expect(
+        validateOccupancyOptions({ occluderDebugStyle: 'neon' as never })
+          .occluderDebugStyle
+      ).toBe('off');
+      expect(
+        validateOccupancyOptions({ occluderDebugStyle: 42 as never })
+          .occluderDebugStyle
+      ).toBe('off');
+    });
+
+    it("migrates a legacy occluderDebugViz=true to 'matcap'", () => {
+      const out = validateOccupancyOptions({
+        occluderDebugViz: true,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.occluderDebugStyle).toBe('matcap');
+    });
+
+    it("migrates a legacy occluderDebugViz=false to 'off'", () => {
+      const out = validateOccupancyOptions({
+        occluderDebugViz: false,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.occluderDebugStyle).toBe('off');
+    });
+
+    it('lets a present occluderDebugStyle override a conflicting legacy occluderDebugViz', () => {
+      const out = validateOccupancyOptions({
+        occluderDebugViz: true,
+        occluderDebugStyle: 'wireframe',
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.occluderDebugStyle).toBe('wireframe');
+    });
+
+    it("ignores the legacy field when occluderDebugStyle is present-but-invalid (new field wins → default 'off')", () => {
+      const out = validateOccupancyOptions({
+        occluderDebugStyle: 'bad' as never,
+        occluderDebugViz: true,
+      } as unknown as Partial<OccupancyOptions>);
+      expect(out.occluderDebugStyle).toBe('off');
+    });
+
+    it('drops the legacy occluderDebugViz key from the validated output', () => {
+      const out = validateOccupancyOptions({
+        occluderDebugViz: true,
+      } as unknown as Partial<OccupancyOptions>);
+      expect('occluderDebugViz' in out).toBe(false);
+    });
+
+    /**
+     * Why these matter: `occluderMeshMode` (2026-06-30 F2/F2b) picks the
+     * persistent-occluder mesher. Since 2026-07-01 it defaults to `'smooth'`
+     * (Naive Surface Nets) — the smoothest, lightest mesh, shipped as the default
+     * occluder now that the persistent occluder is ON by default. It must still
+     * preserve a known mode and reject any corrupt/legacy/unknown value back to
+     * the default rather than crashing the mesher with a bad mode string.
+     */
+    it("defaults occluderMeshMode to 'smooth' for an empty object", () => {
+      expect(validateOccupancyOptions({}).occluderMeshMode).toBe('smooth');
+    });
+
+    it('preserves each known occluderMeshMode', () => {
+      for (const mode of ['greedy', 'corner-fit', 'smooth'] as const) {
+        expect(
+          validateOccupancyOptions({ occluderMeshMode: mode }).occluderMeshMode
+        ).toBe(mode);
+      }
+    });
+
+    it('falls back to the default for an unknown occluderMeshMode', () => {
+      const out = validateOccupancyOptions({
+        occluderMeshMode: 'per-face' as never, // not offered in the recorder
+      });
+      expect(out.occluderMeshMode).toBe(
+        DEFAULT_RECORDING_OPTIONS.occupancy.occluderMeshMode
+      );
+      expect(
+        validateOccupancyOptions({
+          occluderMeshMode: 42 as never,
+        }).occluderMeshMode
+      ).toBe('smooth');
     });
   });
 
@@ -474,6 +715,41 @@ describe('recording-options', () => {
           divisor: 'half' as unknown as number,
         }).divisor
       ).toBe(DEFAULT_RECORDING_OPTIONS.frameTileDisplay.divisor);
+    });
+
+    // maxTiles (Step 4 of the 2026-07-03 long-session fps plan): the LIVE
+    // FIFO cap on rendered frame-tile planes. Default 100 — the 2026-07-02
+    // corpus walks captured 112–145 frames, so the cap binds on a real walk.
+    // 0 = unlimited (the explicit opt-out). Replay ignores the setting
+    // entirely (full-path coverage auditing) — that scope is pinned at the
+    // wiring sites, not here.
+    it('maxTiles defaults to 100 and preserves valid values including 0 (unlimited)', () => {
+      expect(validateFrameTileDisplayOptions({}).maxTiles).toBe(100);
+      expect(DEFAULT_RECORDING_OPTIONS.frameTileDisplay.maxTiles).toBe(100);
+      expect(validateFrameTileDisplayOptions({ maxTiles: 250 }).maxTiles).toBe(
+        250
+      );
+      expect(validateFrameTileDisplayOptions({ maxTiles: 0 }).maxTiles).toBe(0);
+    });
+
+    it('maxTiles clamps/rounds bad values and falls back to default for non-numbers', () => {
+      expect(validateFrameTileDisplayOptions({ maxTiles: -5 }).maxTiles).toBe(
+        0
+      );
+      expect(validateFrameTileDisplayOptions({ maxTiles: 12.7 }).maxTiles).toBe(
+        13
+      );
+      expect(validateFrameTileDisplayOptions({ maxTiles: 1e9 }).maxTiles).toBe(
+        FRAME_TILE_DISPLAY_CONSTRAINTS.maxTiles.max
+      );
+      expect(validateFrameTileDisplayOptions({ maxTiles: NaN }).maxTiles).toBe(
+        100
+      );
+      expect(
+        validateFrameTileDisplayOptions({
+          maxTiles: 'lots' as unknown as number,
+        }).maxTiles
+      ).toBe(100);
     });
   });
 
@@ -540,10 +816,11 @@ describe('recording-options', () => {
      * Why these tests matter (Finding B / DB-1b of
      * 2026-06-14-followup-frame-tile-legacy-aspect-and-live-toggle.md): the new
      * `visualization` group gates the four live debug overlays (frame tiles,
-     * occupancy cubes, GPS+VIO alignment markers, compass cubes). All four MUST
-     * default ON so the change is purely additive (no behaviour change), and
-     * each field is validated boolean-or-default — a corrupted or pre-feature
-     * persisted value must fall back to ON, never silently disable an overlay.
+     * occupancy cubes, GPS+VIO alignment markers, compass cubes) plus the
+     * heading-up minimap preference (2026-06-29). All MUST default ON so the
+     * change is purely additive (no behaviour change), and each field is
+     * validated boolean-or-default — a corrupted or pre-feature persisted value
+     * must fall back to ON, never silently disable a feature.
      */
     it('returns all-true defaults when given empty object', () => {
       const result = validateVisualizationOptions({});
@@ -553,6 +830,10 @@ describe('recording-options', () => {
         occupancyCubes: true,
         gpsAlignmentMarkers: true,
         compassCubes: true,
+        headingUpMap: true,
+        // Exception to the all-ON rule: the stats overlay is a debug tool and
+        // must not cost the default path (2026-07-03 long-session fps plan §0).
+        statsOverlay: false,
       });
     });
 
@@ -562,12 +843,18 @@ describe('recording-options', () => {
         occupancyCubes: false,
         gpsAlignmentMarkers: false,
         compassCubes: false,
+        headingUpMap: false,
+        // true is the non-default for statsOverlay — proves it is preserved,
+        // not silently reset to its OFF default.
+        statsOverlay: true,
       });
       expect(result).toEqual({
         frameTiles: false,
         occupancyCubes: false,
         gpsAlignmentMarkers: false,
         compassCubes: false,
+        headingUpMap: false,
+        statsOverlay: true,
       });
     });
 
@@ -587,10 +874,27 @@ describe('recording-options', () => {
           gpsAlignmentMarkers: null as unknown as boolean,
         }).gpsAlignmentMarkers
       ).toBe(true);
+      // A pre-feature persisted value (heading-up flag absent) falls back to ON.
+      expect(validateVisualizationOptions({}).headingUpMap).toBe(true);
       // A genuine false must survive (not be treated as "missing").
       expect(
         validateVisualizationOptions({ compassCubes: false }).compassCubes
       ).toBe(false);
+      expect(
+        validateVisualizationOptions({ headingUpMap: false }).headingUpMap
+      ).toBe(false);
+      // statsOverlay is the one OFF-default field in the group: a corrupt or
+      // pre-feature persisted value must fall back to OFF (a debug overlay must
+      // never turn itself on), while a genuine true must survive.
+      expect(
+        validateVisualizationOptions({
+          statsOverlay: 'yes' as unknown as boolean,
+        }).statsOverlay
+      ).toBe(false);
+      expect(validateVisualizationOptions({}).statsOverlay).toBe(false);
+      expect(
+        validateVisualizationOptions({ statsOverlay: true }).statsOverlay
+      ).toBe(true);
     });
   });
 
@@ -691,6 +995,7 @@ describe('recording-options', () => {
         visualization: { frameTiles: false },
       });
       expect(result.visualization.frameTiles).toBe(false);
+      expect(result.visualization.statsOverlay).toBe(false);
       // Other overlays stay ON; other groups untouched.
       expect(result.visualization.occupancyCubes).toBe(true);
       expect(result.visualization.gpsAlignmentMarkers).toBe(true);
@@ -1128,8 +1433,24 @@ describe('recording-options', () => {
     });
 
     it('has reasonable default intervals', () => {
-      expect(DEFAULT_RECORDING_OPTIONS.depth.intervalMs).toBe(1000);
+      expect(DEFAULT_RECORDING_OPTIONS.depth.intervalMs).toBe(500);
       expect(DEFAULT_RECORDING_OPTIONS.images.intervalMs).toBe(2000);
+    });
+
+    /**
+     * Why this matters: the 2026-07-01 param-sweep (on a real recording) tuned
+     * the depth/occupancy defaults for FAST mesh reconstruction — surfaces
+     * should mesh ASAP. These pin that decision: intervalMs 500 (min cadence),
+     * gridSize 32 (max points/sample ⇒ cells confirm fastest), minConfidence 3
+     * (fastest noise floor that still suppresses phantoms — ~1.5s dwell),
+     * cellSizeM 0.15 (detail). See
+     * GpsPlusSlamJs_Docs/docs/2026-06-30-occluder-tuning-followups.md (Round 6).
+     */
+    it('uses the fast-reconstruction depth/occupancy defaults', () => {
+      expect(DEFAULT_RECORDING_OPTIONS.depth.intervalMs).toBe(500);
+      expect(DEFAULT_RECORDING_OPTIONS.depth.gridSize).toBe(32);
+      expect(DEFAULT_RECORDING_OPTIONS.occupancy.minConfidence).toBe(3);
+      expect(DEFAULT_RECORDING_OPTIONS.occupancy.cellSizeM).toBe(0.15);
     });
 
     it('has resolutionDivisor defaulting to 1 (full resolution)', () => {
@@ -1150,6 +1471,10 @@ describe('recording-options', () => {
         occupancyCubes: true,
         gpsAlignmentMarkers: true,
         compassCubes: true,
+        headingUpMap: true,
+        // Deliberate exception: the perf stats overlay is debug-only and OFF
+        // by default (2026-07-03 long-session fps plan §0).
+        statsOverlay: false,
       });
     });
   });
@@ -1246,8 +1571,16 @@ describe('recording-options', () => {
           qualityFilter: { ...DEFAULT_RECORDING_OPTIONS.images.qualityFilter },
         },
         arCrashIsolation: { ...DEFAULT_RECORDING_OPTIONS.arCrashIsolation },
-        occupancy: { cellSizeM: 0.1, minConfidence: 3 },
-        frameTileDisplay: { divisor: 4 },
+        occupancy: {
+          cellSizeM: 0.1,
+          minConfidence: 3,
+          persistentOcclusion: true,
+          liveOcclusion: true,
+          occluderDebugStyle: 'depth-shaded-wireframe',
+          occluderMeshMode: 'smooth',
+          occluderRadiusM: 40,
+        },
+        frameTileDisplay: { divisor: 4, maxTiles: 250 },
         visualization: { ...DEFAULT_RECORDING_OPTIONS.visualization },
         qr: { ...DEFAULT_RECORDING_OPTIONS.qr },
         compassDebug: { ...DEFAULT_RECORDING_OPTIONS.compassDebug },

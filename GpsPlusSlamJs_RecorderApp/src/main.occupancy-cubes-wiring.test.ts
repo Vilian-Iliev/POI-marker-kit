@@ -54,16 +54,66 @@ const {
   };
 });
 
-const { mockGetArWorldGroup, mockGetScene, mockGetCamera } = vi.hoisted(() => {
-  const mockArWorldGroup = { name: 'ar-world' };
-  const mockScene = { name: 'scene' };
-  const mockCamera = { name: 'camera' };
+const { mockGetArWorldGroup, mockGetScene, mockGetCamera, mockArWorldGroup } =
+  vi.hoisted(() => {
+    const mockArWorldGroup = {
+      name: 'ar-world',
+      add: vi.fn(),
+      remove: vi.fn(),
+    };
+    const mockScene = { name: 'scene' };
+    const mockCamera = { name: 'camera' };
+    return {
+      mockGetArWorldGroup: vi.fn().mockReturnValue(mockArWorldGroup),
+      mockGetScene: vi.fn().mockReturnValue(mockScene),
+      mockGetCamera: vi.fn().mockReturnValue(mockCamera),
+      mockArWorldGroup,
+    };
+  });
+
+// Live CPU-depth occluder (occupancy.liveOcclusion) — full mock so the wiring
+// (construct → add mesh → per-frame update → session-disposer) is observable.
+const {
+  mockDepthOccluderCtor,
+  mockDepthOccluderInstance,
+  mockOcclusionMeshObject,
+  mockRegisterXrFrameUpdate,
+  mockGetDepthInfoFromFrame,
+  liveOccluderFrameCallbacks,
+  liveOccluderUnregisterFrame,
+} = vi.hoisted(() => {
+  const mockOcclusionMeshObject = { name: 'live-depth-occluder' };
+  const mockDepthOccluderInstance = {
+    getOcclusionMesh: vi.fn(() => mockOcclusionMeshObject),
+    update: vi.fn(),
+    dispose: vi.fn(),
+  };
+  const liveOccluderFrameCallbacks: Array<(ctx: unknown) => void> = [];
+  const liveOccluderUnregisterFrame = vi.fn();
   return {
-    mockGetArWorldGroup: vi.fn().mockReturnValue(mockArWorldGroup),
-    mockGetScene: vi.fn().mockReturnValue(mockScene),
-    mockGetCamera: vi.fn().mockReturnValue(mockCamera),
+    mockDepthOccluderCtor: vi.fn(function () {
+      return mockDepthOccluderInstance;
+    }),
+    mockDepthOccluderInstance,
+    mockOcclusionMeshObject,
+    mockRegisterXrFrameUpdate: vi.fn((cb: (ctx: unknown) => void) => {
+      liveOccluderFrameCallbacks.push(cb);
+      return liveOccluderUnregisterFrame;
+    }),
+    mockGetDepthInfoFromFrame: vi.fn((): { depth: boolean } | null => ({
+      depth: true,
+    })),
+    liveOccluderFrameCallbacks,
+    liveOccluderUnregisterFrame,
   };
 });
+
+vi.mock('gps-plus-slam-app-framework/ar/depth-occluder', () => ({
+  DepthOccluder: mockDepthOccluderCtor,
+}));
+vi.mock('gps-plus-slam-app-framework/ar/xr-frame-loop', () => ({
+  registerXrFrameUpdate: mockRegisterXrFrameUpdate,
+}));
 
 // ---------- mocks for the modules under test ----------
 
@@ -106,9 +156,11 @@ vi.mock('gps-plus-slam-app-framework/ar/webxr-session', () => ({
   setTrackingCallbacks: vi.fn(),
   setTrackingRecoveredCallback: vi.fn(),
   setTrackingStore: vi.fn(),
+  setSessionEndCallback: vi.fn(),
   getScene: mockGetScene,
   getCamera: mockGetCamera,
   getArWorldGroup: mockGetArWorldGroup,
+  getDepthInfoFromFrame: mockGetDepthInfoFromFrame,
   getImageCaptureFrameCount: vi.fn().mockReturnValue(0),
   getDepthSampleCount: vi.fn().mockReturnValue(0),
 }));
@@ -184,6 +236,7 @@ vi.mock('./ui/ref-point-picker', () => ({
 }));
 vi.mock('./ui/navigation', () => ({
   initNavigation: vi.fn(),
+  getCurrentScreen: vi.fn(() => 'setup'),
   enableBeforeUnloadWarning: vi.fn(),
   disableBeforeUnloadWarning: vi.fn(),
   pushScreenState: vi.fn(),
@@ -376,6 +429,30 @@ vi.mock('gps-plus-slam-app-framework', () => ({
 vi.mock('./ui/hud-tracking-quality-subscriber', () => ({
   subscribeHudToTrackingQuality: vi.fn(() => vi.fn()),
 }));
+// Persistent occluder (Step 2 windowed-occluder wiring test): OcclusionMesh +
+// the worker client are mocked so enabling occupancy.persistentOcclusion
+// exercises main.ts's occluder sink without THREE/WebGL.
+const { mockOcclusionMeshCtor, mockDriverRequest } = vi.hoisted(() => ({
+  mockOcclusionMeshCtor: vi.fn(function () {
+    return {
+      applyMeshData: vi.fn(),
+      clear: vi.fn(),
+      dispose: vi.fn(),
+      setDebugStyle: vi.fn(),
+    };
+  }),
+  mockDriverRequest: vi.fn(),
+}));
+vi.mock('gps-plus-slam-app-framework/visualization', () => ({
+  OcclusionMesh: mockOcclusionMeshCtor,
+}));
+vi.mock('./visualization/occluder-mesh-worker-client', () => ({
+  createOccluderMeshWorker: vi.fn(() => ({
+    driver: { request: mockDriverRequest },
+    dispose: vi.fn(),
+  })),
+}));
+
 vi.mock('./replay/replay-handlers', () => ({
   createReplayHandlers: vi.fn().mockReturnValue({
     handleStartReplay: vi.fn(),
@@ -421,7 +498,12 @@ vi.mock('./storage/folder-manager', () => ({
 // Import after all mocks are set up. The occupancy-grid provider is imported
 // REAL (not mocked) so we can assert main.ts publishes/clears the live grid
 // through it — the shared accessor the COLMAP contributor reads (Iter 2.5).
-import { handleEnterARForTesting, resetMainState } from './main';
+import {
+  handleEnterARForTesting,
+  resetMainState,
+  setRecordingOptionsForTesting,
+} from './main';
+import { loadRecordingOptions } from 'gps-plus-slam-app-framework/state/recording-options';
 import { getOccupancyGrid } from './state/occupancy-grid-provider';
 import {
   setDepthCaptureCallback,
@@ -478,16 +560,126 @@ describe('Occupancy-grid cube wiring in live AR', () => {
       storeRef: unknown;
       grid: unknown;
       visualizer: unknown;
+      occluder: unknown;
       refreshIntervalMs: unknown;
     };
     expect(options.grid).toBe(mockOccupancyGridInstance);
     expect(options.visualizer).toBe(mockVisualizerInstance);
     expect(options.storeRef).toBeDefined();
+    // This test exercises the occluder-OFF path: the mock options omit
+    // occupancy.persistentOcclusion (falsy), so no occluder sink is wired. (The
+    // shipped default is now ON — see recording-options.ts — but the wiring keys
+    // off the raw flag, which this mock leaves unset.)
+    expect(options.occluder).toBeUndefined();
     // Issue A (2026-06-22 cube cadence/locality plan §2): the cube-refresh
     // throttle is wired from depth.intervalMs (500 ms in the mock), not the
     // visualizer's hardcoded 1000 ms fallback. This pins the one thing that
     // can silently regress — the call site dropping the option again.
     expect(options.refreshIntervalMs).toBe(500);
+  });
+
+  describe('windowed persistent occluder (Step 2, 2026-07-03 fps plan)', () => {
+    // Why these tests matter: the camera-local occluder window is the plan's
+    // structural fix for the O(total-cells) snapshot+pack cost. The sink
+    // main.ts hands the wirer must snapshot getOccupiedCellsWithinFlat
+    // around the pose when occluderRadiusM > 0 and degrade to the unbounded
+    // flat snapshot otherwise — and the wirer must get the camera-move ε so
+    // a settled grid still re-windows when the user walks.
+
+    function makeFakeGrid() {
+      const flatWindow = new Int32Array([1, 2, 3]);
+      const flatFull = new Int32Array([4, 5, 6, 7, 8, 9]);
+      return {
+        flatWindow,
+        flatFull,
+        grid: {
+          getOccupiedCellsWithinFlat: vi.fn(() => flatWindow),
+          getOccupiedCellsFlat: vi.fn(() => flatFull),
+          getCellPoint: vi.fn(() => null),
+          cellSizeM: 0.15,
+        },
+      };
+    }
+
+    function optionsWithOccluderOn(occluderRadiusM: number) {
+      return {
+        ...loadRecordingOptions(),
+        occupancy: {
+          cellSizeM: 0.15,
+          minConfidence: 3,
+          persistentOcclusion: true,
+          liveOcclusion: false,
+          occluderDebugStyle: 'off' as const,
+          occluderMeshMode: 'smooth' as const,
+          occluderRadiusM,
+        },
+      };
+    }
+
+    async function wiredOccluderSink(occluderRadiusM: number) {
+      setRecordingOptionsForTesting(optionsWithOccluderOn(occluderRadiusM));
+      await handleEnterARForTesting();
+      // .at(-1): a test may enter AR more than once — always read the wiring
+      // of the LATEST cycle.
+      const options = mockWireOccupancyGridSubscribers.mock.calls.at(
+        -1
+      )?.[0] as {
+        occluder?: {
+          refresh(grid: unknown, pose?: { cameraPos: number[] }): void;
+        };
+        refreshOnCameraMoveM?: number;
+      };
+      return options;
+    }
+
+    it('snapshots the camera-local window and passes the ε guard to the wirer', async () => {
+      const options = await wiredOccluderSink(25);
+      expect(options.occluder).toBeDefined();
+      // ε = one chunk edge = 16 · cellSizeM = 2.4 m at the 0.15 m default.
+      expect(options.refreshOnCameraMoveM).toBeCloseTo(2.4, 10);
+
+      const { grid, flatWindow } = makeFakeGrid();
+      options.occluder!.refresh(grid, { cameraPos: [1, 2, 3] });
+      expect(grid.getOccupiedCellsWithinFlat).toHaveBeenCalledWith(
+        [1, 2, 3],
+        25,
+        3
+      );
+      expect(grid.getOccupiedCellsFlat).not.toHaveBeenCalled();
+      expect(mockDriverRequest).toHaveBeenCalledWith(
+        flatWindow,
+        0.15,
+        'smooth',
+        expect.any(Function),
+        expect.any(Function)
+      );
+    });
+
+    it('falls back to the unbounded snapshot for radius 0, a missing pose, or a non-finite pose', async () => {
+      const options = await wiredOccluderSink(0);
+      const { grid: g0, flatFull } = makeFakeGrid();
+      options.occluder!.refresh(g0, { cameraPos: [1, 2, 3] });
+      expect(g0.getOccupiedCellsWithinFlat).not.toHaveBeenCalled();
+      expect(mockDriverRequest).toHaveBeenLastCalledWith(
+        flatFull,
+        0.15,
+        'smooth',
+        expect.any(Function),
+        expect.any(Function)
+      );
+
+      const options25 = await wiredOccluderSink(25);
+      const { grid: g1 } = makeFakeGrid();
+      options25.occluder!.refresh(g1); // no pose (first refresh edge case)
+      expect(g1.getOccupiedCellsWithinFlat).not.toHaveBeenCalled();
+      expect(g1.getOccupiedCellsFlat).toHaveBeenCalledWith(3);
+
+      const { grid: g2 } = makeFakeGrid();
+      options25.occluder!.refresh(g2, { cameraPos: [NaN, 0, 0] });
+      // A glitched pose must degrade to unbounded, never blank the occluder.
+      expect(g2.getOccupiedCellsWithinFlat).not.toHaveBeenCalled();
+      expect(g2.getOccupiedCellsFlat).toHaveBeenCalledWith(3);
+    });
   });
 
   it('resetMainState disposes the wiring and the visualizer', async () => {
@@ -636,5 +828,104 @@ describe('Occupancy-grid cube wiring in live AR', () => {
       screenRotation: 90,
       capturedAt: 1700000000123, // timestamp → capturedAt
     });
+  });
+});
+
+/**
+ * Live CPU-depth occluder wiring (2026-06-29 occlusion-debug-viz-and-live-occluder
+ * Finding 2). When `occupancy.liveOcclusion` is on, handleEnterAR must construct a
+ * DepthOccluder, add its full-screen mesh to arWorldGroup, feed it the per-frame
+ * depth via a registerXrFrameUpdate callback, and dispose it via a session
+ * disposer. The actual occlusion render is device-gated; this pins the JS wiring.
+ */
+describe('Live CPU-depth occluder wiring in live AR', () => {
+  beforeEach(() => {
+    resetMainState();
+    vi.clearAllMocks();
+    liveOccluderFrameCallbacks.length = 0;
+    document.body.innerHTML = `
+      <div id="app"></div>
+      <div id="setup-modal"><h1 id="setup-title">Recorder</h1></div>
+      <div id="controls"></div>
+      <div id="replay-controls" class="hidden"></div>
+      <div id="ref-point-picker-modal"></div>
+    `;
+  });
+
+  /** Turn liveOcclusion on for the next Enter-AR (module-global options need the
+   *  *ForTesting setter, not a per-call loadRecordingOptions override). */
+  function enableLiveOcclusion(): void {
+    const base = vi.mocked(loadRecordingOptions)();
+    setRecordingOptionsForTesting({
+      ...base,
+      occupancy: { ...base.occupancy, liveOcclusion: true },
+    });
+  }
+
+  it('does NOT construct the live occluder when liveOcclusion is off (default)', async () => {
+    await handleEnterARForTesting();
+    expect(mockDepthOccluderCtor).not.toHaveBeenCalled();
+  });
+
+  it('constructs the occluder, adds its mesh to arWorldGroup, and registers the per-frame feed', async () => {
+    enableLiveOcclusion();
+    await handleEnterARForTesting();
+
+    expect(mockDepthOccluderCtor).toHaveBeenCalledTimes(1);
+    expect(mockDepthOccluderInstance.getOcclusionMesh).toHaveBeenCalledTimes(1);
+    expect(mockArWorldGroup.add).toHaveBeenCalledWith(mockOcclusionMeshObject);
+    expect(mockRegisterXrFrameUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('feeds per-frame depth to the occluder via the frame callback', async () => {
+    enableLiveOcclusion();
+    await handleEnterARForTesting();
+
+    const cb = liveOccluderFrameCallbacks[0];
+    expect(cb).toBeDefined();
+    const pose = { views: [{}] };
+    cb!({
+      frame: { getViewerPose: vi.fn(() => pose) },
+      referenceSpace: { name: 'ref' },
+    });
+    // getDepthInfoFromFrame returns a truthy depthInfo → update is called with it.
+    expect(mockGetDepthInfoFromFrame).toHaveBeenCalledTimes(1);
+    expect(mockDepthOccluderInstance.update).toHaveBeenCalledWith({
+      depth: true,
+    });
+  });
+
+  it('does not update the occluder when the frame has no depth (degraded frame)', async () => {
+    enableLiveOcclusion();
+    mockGetDepthInfoFromFrame.mockReturnValueOnce(null);
+    await handleEnterARForTesting();
+
+    liveOccluderFrameCallbacks[0]!({
+      frame: { getViewerPose: vi.fn(() => null) },
+      referenceSpace: {},
+    });
+    expect(mockDepthOccluderInstance.update).not.toHaveBeenCalled();
+  });
+
+  it('disposes the occluder + unregisters the frame feed on resetMainState', async () => {
+    enableLiveOcclusion();
+    await handleEnterARForTesting();
+    expect(mockDepthOccluderInstance.dispose).not.toHaveBeenCalled();
+
+    resetMainState();
+    expect(liveOccluderUnregisterFrame).toHaveBeenCalledTimes(1);
+    expect(mockDepthOccluderInstance.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('disposes the prior occluder + unregisters when Enter-AR re-enters', async () => {
+    enableLiveOcclusion();
+    await handleEnterARForTesting();
+    enableLiveOcclusion(); // re-enable for the second enter
+    await handleEnterARForTesting();
+
+    // The first cycle's occluder/frame feed is torn down before the second wires up.
+    expect(liveOccluderUnregisterFrame).toHaveBeenCalled();
+    expect(mockDepthOccluderInstance.dispose).toHaveBeenCalled();
+    expect(mockDepthOccluderCtor).toHaveBeenCalledTimes(2);
   });
 });

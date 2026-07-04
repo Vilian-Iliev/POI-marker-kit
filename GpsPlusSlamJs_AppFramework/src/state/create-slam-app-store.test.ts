@@ -1,7 +1,7 @@
 ﻿/**
  * Tests for `createSlamAppStore` — the framework's composable Redux store
  * factory introduced in Iter 1 of the AppFramework/RecorderApp boundary
- * migration ([plan](../../../../GpsPlusSlamJs_Docs/docs/2026-05-03-appframework-vs-recorderapp-boundary-analysis.md)).
+ * migration ([plan](../../../../gps-plus-slam/GpsPlusSlamJs_Docs/docs/2026-05-03-appframework-vs-recorderapp-boundary-analysis.md)).
  *
  * The factory replaces `createRecorderStore` for non-recorder consumers.
  * It wires:
@@ -62,6 +62,43 @@ describe('createSlamAppStore', () => {
       expect(state.routing).toBeUndefined();
       expect(state.refPoints).toBeUndefined();
       expect(state.scenario).toBeUndefined();
+    });
+  });
+
+  describe('extraReducers boundary validation (PR #17 review)', () => {
+    it('throws a clear error when an extraReducers key collides with a framework-reserved slice', () => {
+      // Why this test matters: extraReducers is spread AFTER the built-ins, so
+      // a colliding key (mistake or name clash) silently REPLACED a framework
+      // reducer — corrupting e.g. GPS state with no diagnostic. The factory is
+      // a public boundary; bad input must fail loudly at construction.
+      expect(() =>
+        createSlamAppStore({
+          storageBackend: backend,
+          extraReducers: { gpsData: () => null },
+        })
+      ).toThrow(/gpsData/);
+    });
+
+    it('names every colliding key, not just the first', () => {
+      expect(() =>
+        createSlamAppStore({
+          storageBackend: backend,
+          extraReducers: {
+            recording: () => ({}),
+            trackingQuality: () => ({}),
+          },
+        })
+      ).toThrow(/recording.*trackingQuality|trackingQuality.*recording/);
+    });
+
+    it('still accepts non-colliding extraReducers unchanged', () => {
+      const store = createSlamAppStore({
+        storageBackend: backend,
+        extraReducers: { myAppSlice: () => 'ok' },
+      });
+      expect(
+        (store.getState() as unknown as { myAppSlice: string }).myAppSlice
+      ).toBe('ok');
     });
   });
 

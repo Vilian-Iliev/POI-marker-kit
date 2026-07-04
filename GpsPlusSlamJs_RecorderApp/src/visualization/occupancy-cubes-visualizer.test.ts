@@ -253,6 +253,100 @@ describe('OccupancyCubesVisualizer', () => {
     visualizer.dispose();
   });
 
+  it('drops cells beyond the over-cap radius even when the cap has room (Step 1.1, 2026-07-03 fps plan)', () => {
+    // Why this test matters: the radius pre-filter is what bounds the
+    // over-cap refresh cost by the viewer's neighbourhood instead of the
+    // whole session. Cells beyond overCapRadiusM must vanish BY DESIGN even
+    // when the instance budget could fit them — otherwise the sort would
+    // still walk every cell ever seen.
+    const scene = new THREE.Scene();
+    const visualizer = new OccupancyCubesVisualizer(scene, {
+      maxInstances: 3,
+      overCapRadiusM: 10,
+    });
+    const near1: GridCell = [1, 0, 0]; // 0.15 m
+    const near2: GridCell = [0, 1, 0]; // 0.15 m
+    // 100 · 0.15 m = 15 m > 10 m radius; the 4-cell grid is over the cap of 3.
+    const far1: GridCell = [100, 0, 0];
+    const far2: GridCell = [0, 0, 100];
+    const grid = makeGridSource([far1, near1, far2, near2], 0.15);
+
+    visualizer.refresh(grid, { cameraPos: [0, 0, 0] });
+    // Capacity 3, but only the 2 within-radius cells are drawn.
+    expect(visualizer.getCount()).toBe(2);
+    visualizer.dispose();
+  });
+
+  it('a non-positive overCapRadiusM opts out of the radius bound (legacy nearest-N)', () => {
+    const scene = new THREE.Scene();
+    const visualizer = new OccupancyCubesVisualizer(scene, {
+      maxInstances: 3,
+      overCapRadiusM: 0,
+    });
+    const cells: GridCell[] = [
+      [1, 0, 0],
+      [0, 1, 0],
+      [100, 0, 0],
+      [0, 0, 100],
+    ];
+    visualizer.refresh(makeGridSource(cells, 0.15), { cameraPos: [0, 0, 0] });
+    // Unbounded: the cap (3) is filled even though two cells are ~15 m away.
+    expect(visualizer.getCount()).toBe(3);
+    visualizer.dispose();
+  });
+
+  it('snapshots via the grid windowed query when available (Step 2 chunk index)', () => {
+    // Why this test matters: with getOccupiedCellsWithin the refresh cost is
+    // bounded by the neighbourhood via the chunk index — the O(N) full-grid
+    // walk (getOccupiedCells) must not run at all when the grid offers the
+    // windowed query and a finite pose exists.
+    const scene = new THREE.Scene();
+    const visualizer = new OccupancyCubesVisualizer(scene, {
+      minObservations: 3,
+      overCapRadiusM: 12,
+    });
+    const near: GridCell = [1, 0, 0];
+    const base = makeGridSource([near], 0.15);
+    const getOccupiedCellsWithin = vi.fn(() => [near]);
+    const grid = { ...base, getOccupiedCellsWithin };
+
+    visualizer.refresh(grid, { cameraPos: [0, 0, 0] });
+
+    expect(getOccupiedCellsWithin).toHaveBeenCalledWith([0, 0, 0], 12, 3);
+    expect(base.getOccupiedCells).not.toHaveBeenCalled();
+    expect(visualizer.getCount()).toBe(1);
+    visualizer.dispose();
+  });
+
+  it('falls back to the full snapshot without a pose or with the radius opted out', () => {
+    const scene = new THREE.Scene();
+    const cells: GridCell[] = [[1, 0, 0]];
+    // No pose: the windowed query has no center to window around.
+    const noPoseViz = new OccupancyCubesVisualizer(scene, {
+      overCapRadiusM: 12,
+    });
+    const base1 = makeGridSource(cells, 0.15);
+    const windowed1 = vi.fn(() => cells);
+    noPoseViz.refresh({ ...base1, getOccupiedCellsWithin: windowed1 });
+    expect(windowed1).not.toHaveBeenCalled();
+    expect(base1.getOccupiedCells).toHaveBeenCalledTimes(1);
+    noPoseViz.dispose();
+
+    // Radius 0 (legacy unbounded): windowing is explicitly off.
+    const unboundedViz = new OccupancyCubesVisualizer(scene, {
+      overCapRadiusM: 0,
+    });
+    const base2 = makeGridSource(cells, 0.15);
+    const windowed2 = vi.fn(() => cells);
+    unboundedViz.refresh(
+      { ...base2, getOccupiedCellsWithin: windowed2 },
+      { cameraPos: [0, 0, 0] }
+    );
+    expect(windowed2).not.toHaveBeenCalled();
+    expect(base2.getOccupiedCells).toHaveBeenCalledTimes(1);
+    unboundedViz.dispose();
+  });
+
   it('ignores the pose and draws every cell while under the cap', () => {
     // Locality only kicks in over the cap; under it, a supplied pose must not
     // change the "draw everything" behavior.

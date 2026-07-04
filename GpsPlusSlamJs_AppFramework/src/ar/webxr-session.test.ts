@@ -53,6 +53,10 @@ import {
   DEFAULT_CAMERA_FRAME_CAPTURE_SIZE,
   setFrameCallback,
   getLiveCss3dManager,
+  getDepthInfoFromFrame,
+  AR_CAMERA_FOV,
+  AR_CAMERA_NEAR,
+  AR_CAMERA_FAR,
   type ARPose,
 } from './webxr-session.js';
 import { createMockPose } from '../test-utils/browser-mocks.js';
@@ -238,6 +242,68 @@ describe('buildSessionOptions', () => {
     );
 
     expect(options.optionalFeatures).toBeUndefined();
+  });
+
+  /**
+   * Why these tests matter (live depth occluder, Iter 1 —
+   * 2026-06-14-webxr-depth-occlusion-plan.md §6/§8):
+   * The live CPU-depth occluder is a consumer of the SAME cpu-optimized depth
+   * stream the grid uses, but consumer apps want occlusion WITHOUT the
+   * recorder's depth-capture crash-isolation flag. So `requestDepthOcclusion`
+   * must request `depth-sensing` (cpu-optimized) independently of
+   * `enableDepthSensingFeature`. Crucially, BOTH flags resolving the same
+   * cpu-optimized usage is valid — there is no conflict and no throw (this is
+   * the key difference from the deleted gpu-optimized plan, which had to throw
+   * when both were requested).
+   */
+  it('requests cpu-optimized depth-sensing when requestDepthOcclusion is true even if depth capture is off', () => {
+    const mockElement = document.createElement('div');
+
+    const options = buildSessionOptions(
+      mockElement,
+      { enableDepthSensingFeature: false },
+      { requestDepthOcclusion: true }
+    ) as XRSessionInit & {
+      depthSensing?: { usagePreference?: string[] };
+    };
+
+    expect(options.optionalFeatures).toContain('depth-sensing');
+    expect(options.depthSensing?.usagePreference).toContain('cpu-optimized');
+    expect(options.depthSensing?.usagePreference).not.toContain(
+      'gpu-optimized'
+    );
+  });
+
+  it('requests depth-sensing exactly once (no conflict/throw) when BOTH depth flags are set', () => {
+    const mockElement = document.createElement('div');
+
+    const options = buildSessionOptions(
+      mockElement,
+      { enableDepthSensingFeature: true },
+      { requestDepthOcclusion: true }
+    ) as XRSessionInit & {
+      depthSensing?: { usagePreference?: string[] };
+    };
+
+    // Coexist on the same cpu-optimized stream — requested once, not duplicated.
+    const depthEntries = (options.optionalFeatures ?? []).filter(
+      (f) => f === 'depth-sensing'
+    );
+    expect(depthEntries).toHaveLength(1);
+    expect(options.depthSensing?.usagePreference).toContain('cpu-optimized');
+  });
+
+  it('keeps depth-sensing off when both depth flags are off', () => {
+    const mockElement = document.createElement('div');
+
+    const options = buildSessionOptions(
+      mockElement,
+      { enableDepthSensingFeature: false },
+      { requestDepthOcclusion: false }
+    ) as XRSessionInit & { depthSensing?: unknown };
+
+    expect(options.optionalFeatures ?? []).not.toContain('depth-sensing');
+    expect(options.depthSensing).toBeUndefined();
   });
 });
 
@@ -463,6 +529,26 @@ describe('createSceneHierarchy', () => {
     expect(basisChangeNode.parent).toBe(arWorldGroup);
     expect(arWorldGroup.parent).toBe(scene);
     expect(scene.parent).toBeNull();
+  });
+
+  /**
+   * Why this test matters:
+   * F2 (2026-07-04 user feedback): objects 100–200 m away popped in late
+   * because the far plane was a hard-coded literal 100 in the camera
+   * constructor. The frustum values are named exported constants (a single
+   * source of truth — live AR and replay both go through
+   * createSceneHierarchy()), and far is 200 m to cover the reported range.
+   * Depth precision stays comfortable: far/near = 2×10⁴ on a 24-bit buffer.
+   */
+  it('camera frustum uses the exported AR_CAMERA_* constants with far = 200 m (F2)', () => {
+    const { camera } = createSceneHierarchy();
+
+    expect(AR_CAMERA_FOV).toBe(70);
+    expect(AR_CAMERA_NEAR).toBe(0.01);
+    expect(AR_CAMERA_FAR).toBe(200);
+    expect(camera.fov).toBe(AR_CAMERA_FOV);
+    expect(camera.near).toBe(AR_CAMERA_NEAR);
+    expect(camera.far).toBe(AR_CAMERA_FAR);
   });
 
   /**
@@ -1227,6 +1313,70 @@ describe('depth capture functions', () => {
    */
   it('getDepthSampleCount returns 0 when not sampling', () => {
     expect(getDepthSampleCount()).toBe(0);
+  });
+});
+
+/**
+ * `getDepthInfoFromFrame` is exported so a consumer can feed the live depth
+ * occluder from a `registerXrFrameUpdate` callback. These tests pin that it
+ * surfaces the widened occluder metadata (`data` / `rawValueToMeters` /
+ * `normDepthBufferFromNormView` / `projectionMatrix`) and degrades to `null`
+ * exactly when depth is unavailable — so a degraded frame can never feed the
+ * occluder stale/garbage depth.
+ */
+describe('getDepthInfoFromFrame', () => {
+  const identity16 = (): Float32Array => {
+    const m = new Float32Array(16);
+    m[0] = m[5] = m[10] = m[15] = 1;
+    return m;
+  };
+
+  it('wraps per-frame XRCPUDepthInformation with the widened occluder fields', () => {
+    const projectionMatrix = identity16();
+    const pose = {
+      views: [{ projectionMatrix } as unknown as XRView],
+    } as unknown as XRViewerPose;
+    const depthData = new ArrayBuffer(16 * 16 * 2);
+    const frame = {
+      getDepthInformation: vi.fn(() => ({
+        width: 16,
+        height: 16,
+        getDepthInMeters: () => 1,
+        data: depthData,
+        rawValueToMeters: 0.001,
+        normDepthBufferFromNormView: { matrix: identity16() },
+      })),
+    } as unknown as XRFrame;
+
+    const info = getDepthInfoFromFrame(frame, pose);
+    expect(info).not.toBeNull();
+    expect(info!.data).toBe(depthData); // live reference, no clone
+    expect(info!.rawValueToMeters).toBe(0.001);
+    expect(info!.normDepthBufferFromNormView).toHaveLength(16);
+    expect(info!.projectionMatrix).toHaveLength(16);
+  });
+
+  it('returns null when there is no pose/view', () => {
+    expect(getDepthInfoFromFrame({} as XRFrame, null)).toBeNull();
+  });
+
+  it('returns null when the frame has no getDepthInformation', () => {
+    const pose = {
+      views: [{ projectionMatrix: identity16() } as unknown as XRView],
+    } as unknown as XRViewerPose;
+    expect(getDepthInfoFromFrame({} as XRFrame, pose)).toBeNull();
+  });
+
+  it('returns null when getDepthInformation throws (device hiccup)', () => {
+    const pose = {
+      views: [{ projectionMatrix: identity16() } as unknown as XRView],
+    } as unknown as XRViewerPose;
+    const frame = {
+      getDepthInformation: vi.fn(() => {
+        throw new Error('depth unavailable');
+      }),
+    } as unknown as XRFrame;
+    expect(getDepthInfoFromFrame(frame, pose)).toBeNull();
   });
 });
 

@@ -181,6 +181,19 @@ describe('ImageQualityGate', () => {
     expect(gate.historyLength()).toBe(4);
   });
 
+  it('arms the blur check even when minSamples exceeds historySize (clamped — PR #124/#127 review)', () => {
+    // Why this test matters: the rolling history is capped at historySize, so
+    // an unclamped minSamples > historySize could NEVER be reached — the blur
+    // check silently never armed and every blurry frame passed forever.
+    const gate = new ImageQualityGate(3, 10);
+    gate.evaluate(100, 200, cfg);
+    gate.evaluate(100, 200, cfg);
+    gate.evaluate(100, 200, cfg); // history full (3) — must count as warmed up
+    const v = gate.evaluate(40, 200, cfg); // 40 < 0.5·100 → blurry
+    expect(v.accept).toBe(false);
+    expect(v.reason).toBe('blurry');
+  });
+
   it('reset() clears the baseline back to cold start', () => {
     const gate = new ImageQualityGate(15, 3);
     gate.evaluate(100, 200, cfg);

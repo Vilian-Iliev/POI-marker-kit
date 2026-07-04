@@ -73,6 +73,46 @@ export interface DepthInfo {
   getDepthInMeters: (x: number, y: number) => number;
   /** Column-major projection matrix of the capturing XRView, if known. */
   projectionMatrix?: Matrix4;
+  /**
+   * Raw depth buffer (`XRCPUDepthInformation.data`) — a **live reference**
+   * valid only within the originating XR frame callback (NOT copied, unlike
+   * the matrices: the per-frame buffer is too large to clone and the live
+   * depth occluder uploads it synchronously). Absent when the source carries
+   * no `data` (e.g. the sparse-only path). Plumbed for the live depth occluder
+   * (2026-06-14-webxr-depth-occlusion-plan.md §2); the sparse sampler ignores it.
+   */
+  data?: ArrayBuffer;
+  /**
+   * `XRCPUDepthInformation.rawValueToMeters` — multiply a raw depth sample by
+   * this to get metres. Preserved only when a finite number. Occluder-only.
+   */
+  rawValueToMeters?: number;
+  /**
+   * The `.matrix` (column-major 16-tuple) of
+   * `XRDepthInformation.normDepthBufferFromNormView` — the screen-UV → depth-UV
+   * transform the occluder shader needs. Copied + validated like
+   * `projectionMatrix` (the UA may reuse the backing array). Occluder-only.
+   */
+  normDepthBufferFromNormView?: Matrix4;
+}
+
+/**
+ * Defensively copy a 16-element column-major matrix into a plain serializable
+ * tuple. Returns undefined for missing input, the wrong length, or any
+ * non-finite entry — so an invalid (or UA-reused/garbage) source degrades to
+ * "absent" rather than poisoning downstream maths. The copy also de-aliases
+ * Float32Arrays the UA reuses across frames.
+ */
+function copyValidMatrix16(
+  src: ArrayLike<number> | null | undefined
+): Matrix4 | undefined {
+  if (!src || src.length !== 16) {
+    return undefined;
+  }
+  const copy = Array.from(src);
+  return copy.every((v) => Number.isFinite(v))
+    ? (copy as unknown as Matrix4)
+    : undefined;
 }
 
 /**
@@ -84,12 +124,21 @@ export interface DepthInfo {
  *   the UA may reuse across frames) is defensively validated and copied into
  *   a plain serializable 16-tuple; invalid input (wrong length, non-finite
  *   entries) yields a DepthInfo without a matrix rather than an error.
+ * - The live-occluder metadata (`data`, `rawValueToMeters`,
+ *   `normDepthBufferFromNormView`) is preserved when present and valid: `data`
+ *   by live reference (no clone — see {@link DepthInfo.data}), the scale only
+ *   when finite, and the UV transform's `.matrix` copied like
+ *   `projectionMatrix`. The sparse grid sampler ignores all three; a source
+ *   lacking them (e.g. the existing test doubles) wraps exactly as before.
  */
 export function wrapXRDepthInfo(
   raw: {
     width: number;
     height: number;
     getDepthInMeters: (x: number, y: number) => number;
+    data?: ArrayBuffer;
+    rawValueToMeters?: number;
+    normDepthBufferFromNormView?: { matrix?: ArrayLike<number> } | null;
   },
   projectionMatrix: ArrayLike<number> | undefined
 ): DepthInfo {
@@ -98,15 +147,36 @@ export function wrapXRDepthInfo(
     height: raw.height,
     getDepthInMeters: raw.getDepthInMeters.bind(raw),
   };
-  if (projectionMatrix && projectionMatrix.length === 16) {
-    const copy = Array.from(projectionMatrix);
-    if (copy.every((v) => Number.isFinite(v))) {
-      wrapped.projectionMatrix = copy as unknown as Matrix4;
-    }
+  const projection = copyValidMatrix16(projectionMatrix);
+  if (projection) {
+    wrapped.projectionMatrix = projection;
+  }
+  // Live reference, not a clone — the per-frame buffer is large and the
+  // occluder uploads it synchronously within this frame callback.
+  if (raw.data instanceof ArrayBuffer) {
+    wrapped.data = raw.data;
+  }
+  if (
+    typeof raw.rawValueToMeters === 'number' &&
+    Number.isFinite(raw.rawValueToMeters)
+  ) {
+    wrapped.rawValueToMeters = raw.rawValueToMeters;
+  }
+  const uvTransform = copyValidMatrix16(
+    raw.normDepthBufferFromNormView?.matrix
+  );
+  if (uvTransform) {
+    wrapped.normDepthBufferFromNormView = uvTransform;
   }
   return wrapped;
 }
 
+// Library-level fallback used by consumers that do NOT supply a config
+// (MinimalExample / AnchorStarter). Intentionally NOT synced to the recorder's
+// 2026-06-30 re-tune (intervalMs 500 / gridSize 24) — those denser defaults are
+// a recorder-specific decision sourced from DEFAULT_RECORDING_OPTIONS; bumping
+// this library default would silently re-tune unrelated apps. See
+// recording-options.ts.md (F1) for the rationale.
 const DEFAULT_CONFIG: DepthSamplerConfig = {
   intervalMs: 1000,
   gridSize: 16,

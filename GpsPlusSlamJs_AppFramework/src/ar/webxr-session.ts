@@ -227,6 +227,8 @@ export function resetWebXRState(): void {
   onTrackingRestarted = null;
   onTrackingLost = null;
   onTrackingRecovered = null;
+  onSessionEnd = null;
+  endRequestedByApp = false;
   depthSampler = null;
   onDepthCaptured = null;
   onDepthUnavailable = null;
@@ -351,6 +353,33 @@ let onTrackingLost: (() => void) | null = null;
  * Set via setTrackingRecoveredCallback.
  */
 let onTrackingRecovered: (() => void) | null = null;
+
+/**
+ * Info passed to the session-end callback (F3, 2026-07-04 user feedback).
+ * `requestedByApp` discriminates the app's own `endARSession()` from a
+ * system-initiated end (e.g. the Android back gesture, which ends an
+ * immersive XRSession directly — no popstate, no beforeunload, not
+ * cancelable).
+ */
+export interface SessionEndInfo {
+  requestedByApp: boolean;
+}
+
+/**
+ * Host callback fired exactly once whenever the XRSession ends — on BOTH the
+ * app-initiated and the system-initiated path (set via setSessionEndCallback).
+ * Cleared by resetWebXRState() like every other module-level callback.
+ */
+let onSessionEnd: ((info: SessionEndInfo) => void) | null = null;
+
+/**
+ * Set by endARSession() immediately before its `xrSession.end()` so the
+ * shared 'end' listener can tell the two trigger paths apart (the app's own
+ * end() fires the same 'end' event the system path does). Consumed (reset to
+ * false) by handleSessionEnded(); also cleared defensively in
+ * resetWebXRState() in case end() rejects without the event ever firing.
+ */
+let endRequestedByApp = false;
 
 /**
  * Depth sampler instance (created when AR session starts with depth callbacks)
@@ -638,6 +667,18 @@ export interface SessionFeatureOptions {
    * existing recorder/anchor sessions are unaffected.
    */
   requestHitTest?: boolean;
+  /**
+   * Request `depth-sensing` (cpu-optimized) for the **live depth occluder**
+   * even when crash-isolation's `enableDepthSensingFeature` is off. Consumer
+   * apps (AnchorStarter / MinimalExample) want occlusion without the recorder's
+   * depth-capture wiring, so the occluder owns its own session-feature switch.
+   * Both flags resolve the **same** cpu-optimized usage — setting both is valid
+   * (no conflict, no throw): the grid sampler and the occluder are two consumers
+   * of one depth read. Default `false`.
+   *
+   * @see GpsPlusSlamJs_Docs/docs/2026-06-14-webxr-depth-occlusion-plan.md §6/§8
+   */
+  requestDepthOcclusion?: boolean;
 }
 
 /**
@@ -648,7 +689,7 @@ export interface SessionFeatureOptions {
  * @param isolationOptions - Crash-isolation diagnostic flags (DOM overlay,
  *   depth-sensing, camera-access)
  * @param sessionFeatures - Opt-in standard WebXR features that are independent
- *   of crash isolation (currently `requestHitTest`)
+ *   of crash isolation (`requestHitTest`, `requestDepthOcclusion`)
  * @returns XRSessionInit options
  * @throws Error if rootElement is null
  */
@@ -671,14 +712,27 @@ export function buildSessionOptions(
     sessionOptions.domOverlay = { root: rootElement };
   }
 
-  if (normalizedOptions.enableDepthSensingFeature) {
+  // Request depth-sensing if EITHER the recorder's depth-capture flag OR the
+  // live occluder's `requestDepthOcclusion` is set. Both resolve the same
+  // cpu-optimized stream, so they coexist — request the feature exactly once.
+  if (
+    normalizedOptions.enableDepthSensingFeature ||
+    sessionFeatures.requestDepthOcclusion
+  ) {
     optionalFeatures.push('depth-sensing');
     Object.assign(sessionOptions, {
-      // Required when requesting depth-sensing feature, otherwise Chrome/ARCore throws TypeError
-      // Note: Only 'cpu-optimized' is used to avoid a Three.js bug where glBinding.getDepthInformation()
-      // is called without null-checking glBinding when 'gpu-optimized' is active.
-      // See: https://github.com/mrdoob/three.js/issues/... (Three.js WebXRManager race condition)
-      // Our DepthSampler uses XRFrame.getDepthInformation() which works with cpu-optimized.
+      // `depthSensing` is REQUIRED whenever `depth-sensing` is requested,
+      // otherwise Chrome/ARCore throws a TypeError.
+      //
+      // We deliberately pin `cpu-optimized` as the single source of truth: the
+      // `XRCPUDepthInformation` it yields feeds BOTH the OccupancyGrid / COLMAP
+      // export (via DepthSampler.getDepthInMeters) AND the live depth occluder
+      // (which uploads the raw `data` buffer + `normDepthBufferFromNormView` /
+      // `rawValueToMeters` metadata each frame). `gpu-optimized` would surrender
+      // that CPU buffer and is therefore rejected — not (any longer) merely to
+      // dodge the old three.js `getDepthInformation` null-deref (fixed in r184),
+      // but because cpu-optimized is what every depth consumer here is built on.
+      // See 2026-06-14-webxr-depth-occlusion-plan.md §1.
       depthSensing: {
         usagePreference: ['cpu-optimized'],
         dataFormatPreference: ['luminance-alpha', 'float32'],
@@ -718,6 +772,24 @@ export async function isWebXRSupported(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * AR camera frustum constants — the single source of truth for live AR and
+ * replay (both build their camera via {@link createSceneHierarchy}).
+ *
+ * F2 (2026-07-04 user feedback): far raised 100 → 200 m so objects in the
+ * reported 100–200 m range are no longer frustum-culled. The far-plane
+ * distance itself is essentially free at this app's object counts; the real
+ * constraint is depth precision — far/near = 2×10⁴ is comfortable for a
+ * 24-bit depth buffer. Revisit the ratio if AR_CAMERA_NEAR ever shrinks.
+ *
+ * Note: these apply to WebGL content only. The CSS3D minimap is composited by
+ * the browser from the camera fov alone — near/far do not clip it (F1 in the
+ * same feedback doc).
+ */
+export const AR_CAMERA_FOV = 70;
+export const AR_CAMERA_NEAR = 0.01;
+export const AR_CAMERA_FAR = 200;
 
 /**
  * Create the scene hierarchy with proper AR/GPS frame separation.
@@ -791,10 +863,10 @@ export function createSceneHierarchy(): {
   // Its world transform = arWorldGroup.matrix × basisChangeNode.matrix × arpose.matrix × camera.matrix
   //                     = alignment × WEBXR_TO_NUE × arpose × camera  (mathematically identical to before)
   const newCamera = new THREE.PerspectiveCamera(
-    70,
+    AR_CAMERA_FOV,
     window.innerWidth / window.innerHeight,
-    0.01,
-    100
+    AR_CAMERA_NEAR,
+    AR_CAMERA_FAR
   );
   newArPose.add(newCamera);
 
@@ -883,16 +955,13 @@ export async function initAR(
 
   xrSession = await navigator.xr.requestSession('immersive-ar', sessionOptions);
 
-  // Handle session end
+  // Handle session end — BOTH trigger paths funnel through this listener:
+  // the system-initiated end (Android back gesture — fires 'end' directly)
+  // and the app's own endARSession() (its session.end() fires the same
+  // event). handleSessionEnded() runs the full teardown and notifies the
+  // host exactly once (F3, 2026-07-04 user feedback).
   xrSession.addEventListener('end', () => {
-    log.info('Session ended');
-    // Reset the tracking slice so the next session starts from a clean
-    // INITIALIZING state.
-    if (trackingStore) {
-      trackingStore.dispatch(resetTrackingAction());
-    }
-    xrSession = null;
-    latestArPose = null;
+    handleSessionEnded();
   });
 
   await renderer.xr.setSession(xrSession);
@@ -1213,10 +1282,17 @@ function onXRFrame(time: number, frame: XRFrame | undefined): void {
 }
 
 /**
- * Extract depth information from an XR frame.
- * Returns null if depth sensing is not available.
+ * Extract depth information from an XR frame. Returns `null` if depth sensing is
+ * not available (no pose/view, no `getDepthInformation`, or the call throws).
+ *
+ * Exported so a consumer can feed the **live depth occluder** from a
+ * `registerXrFrameUpdate` callback — the callback has the live `frame` +
+ * `referenceSpace`, computes `pose = frame.getViewerPose(referenceSpace)`, and
+ * passes both here to obtain the per-frame {@link DepthInfo} (with the widened
+ * `data` / `rawValueToMeters` / `normDepthBufferFromNormView` / `projectionMatrix`
+ * the occluder needs). The same wrapped depth the sparse grid sampler consumes.
  */
-function getDepthInfoFromFrame(
+export function getDepthInfoFromFrame(
   frame: XRFrame,
   pose: XRViewerPose | null
 ): DepthInfo | null {
@@ -1226,12 +1302,18 @@ function getDepthInfoFromFrame(
   }
 
   // XRFrame may have getDepthInformation method if depth-sensing feature is enabled
-  // TypeScript doesn't have full types for this yet
+  // TypeScript doesn't have full types for this yet. The `data` /
+  // `rawValueToMeters` / `normDepthBufferFromNormView` fields exist on
+  // XRCPUDepthInformation and are forwarded to the live depth occluder via
+  // wrapXRDepthInfo (the sparse grid sampler reads only getDepthInMeters).
   const xrFrame = frame as XRFrame & {
     getDepthInformation?: (view: XRView) => {
       width: number;
       height: number;
       getDepthInMeters: (x: number, y: number) => number;
+      data?: ArrayBuffer;
+      rawValueToMeters?: number;
+      normDepthBufferFromNormView?: { matrix?: Float32Array } | null;
     } | null;
   };
 
@@ -1393,6 +1475,55 @@ export function nueQuaternionToWebXR(
 }
 
 /**
+ * Register a host callback fired exactly once whenever the XRSession ends —
+ * app-initiated ({@link endARSession}) AND system-initiated (e.g. the Android
+ * back gesture, which ends an immersive session directly and uncancelably).
+ * `info.requestedByApp` discriminates the two. Fired AFTER the full teardown,
+ * so the host can immediately start a fresh session from inside the callback.
+ *
+ * Cleared by resetWebXRState() (i.e. after every session end) like the other
+ * module-level callbacks — re-register before/with each new session.
+ * Pass `null` to unregister. F3, 2026-07-04 user feedback.
+ */
+export function setSessionEndCallback(
+  cb: ((info: SessionEndInfo) => void) | null
+): void {
+  onSessionEnd = cb;
+}
+
+/**
+ * The ONE teardown for a session that has ended, shared by both trigger
+ * paths via the XRSession 'end' listener. Before F3 the system-initiated
+ * path (back gesture) only nulled `xrSession`/`latestArPose`, leaving the
+ * renderer compositing the 3D scene over a black camera background and the
+ * host app never notified — the "haunted scene" from
+ * docs/2026-02-15-lifecycle-orphans.md §1.
+ */
+function handleSessionEnded(): void {
+  log.info('Session ended');
+  // Capture callback + discriminator BEFORE teardown — resetWebXRState()
+  // clears both.
+  const callback = onSessionEnd;
+  const requestedByApp = endRequestedByApp;
+  endRequestedByApp = false;
+  // Reset the tracking slice so the next session starts from a clean
+  // INITIALIZING state (must run before resetWebXRState() nulls the store).
+  if (trackingStore) {
+    trackingStore.dispatch(resetTrackingAction());
+  }
+  resetWebXRState();
+  // Notify the host last, defensively: a throwing callback must never leave
+  // the module half-torn-down.
+  if (callback) {
+    try {
+      callback({ requestedByApp });
+    } catch (err) {
+      log.error('Session-end callback threw:', err);
+    }
+  }
+}
+
+/**
  * End the current XR session and clean up all resources.
  *
  * Stops the animation loop, ends the XR session, then delegates the full
@@ -1423,6 +1554,10 @@ export async function endARSession(): Promise<void> {
   // guarantees the module always returns to a clean, re-initialisable state.
   try {
     if (xrSession) {
+      // Mark this end as app-initiated for the shared 'end' listener —
+      // end() fires the same 'end' event a system-initiated end does, and
+      // handleSessionEnded() consumes this flag to discriminate the paths.
+      endRequestedByApp = true;
       await xrSession.end();
     }
   } finally {

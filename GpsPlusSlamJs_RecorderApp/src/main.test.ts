@@ -326,6 +326,7 @@ vi.mock('./ui/confirm-dialog', () => ({
 // Mock navigation for back-during-recording tests (Issue 5 — 2026-02-27)
 vi.mock('./ui/navigation', () => ({
   initNavigation: vi.fn(),
+  getCurrentScreen: vi.fn(() => 'setup'),
   enableBeforeUnloadWarning: vi.fn(),
   disableBeforeUnloadWarning: vi.fn(),
   pushScreenState: vi.fn(),
@@ -447,6 +448,7 @@ vi.mock('gps-plus-slam-app-framework/ar/webxr-session', () => ({
   setTrackingCallbacks: mockSetTrackingCallbacks,
   setTrackingRecoveredCallback: mockSetTrackingRecoveredCallback,
   setTrackingStore: vi.fn(),
+  setSessionEndCallback: vi.fn(),
   getScene: vi.fn().mockReturnValue(null),
   getCamera: vi.fn().mockReturnValue(null),
   getArWorldGroup: vi.fn().mockReturnValue(null),
@@ -957,12 +959,53 @@ describe('AR Partial Init Failure Cleanup (Issue #10)', () => {
         enableDepthSensingFeature: true,
         enableCss3dRenderer: true,
         enableCameraTextureAcquisition: true,
-      })
+      }),
+      // Live occluder OFF in the default mock options → depth occlusion not
+      // requested as a session feature (2026-06-29 two-occlusion-toggles).
+      expect.objectContaining({ requestDepthOcclusion: false })
     );
 
     // endARSession should be called to clean up the XR session
     expect(endARSession).toHaveBeenCalled();
     expect(showError).toHaveBeenCalled();
+  });
+
+  /**
+   * Why this test matters (2026-06-29 two-composable-occlusion-toggles):
+   * the "Live depth occluder" checkbox (occupancy.liveOcclusion) must request
+   * the `requestDepthOcclusion` session feature so the session negotiates the
+   * `cpu-optimized` depth stream the live occluder consumes — even when depth
+   * *recording* is independent. This is the CI-testable half of the live
+   * wiring; the render-side integration is device-gated (see the follow-ups).
+   */
+  it('requests depth occlusion as a session feature when liveOcclusion is on', async () => {
+    const { initAR } =
+      await import('gps-plus-slam-app-framework/ar/webxr-session');
+    const { loadRecordingOptions } =
+      await import('gps-plus-slam-app-framework/state/recording-options');
+    const { handleEnterARForTesting, setRecordingOptionsForTesting } =
+      await import('./main');
+
+    vi.clearAllMocks();
+    document.body.innerHTML = '<div id="app"></div>';
+    vi.mocked(initAR).mockResolvedValue(undefined);
+
+    // Turn the live occluder ON for this one Enter-AR by overriding the
+    // module-level recording options (spread the default mock so every other
+    // field main.ts reads stays intact).
+    const base = vi.mocked(loadRecordingOptions)();
+    setRecordingOptionsForTesting({
+      ...base,
+      occupancy: { ...base.occupancy, liveOcclusion: true },
+    });
+
+    await handleEnterARForTesting();
+
+    expect(initAR).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.any(Object),
+      expect.objectContaining({ requestDepthOcclusion: true })
+    );
   });
 });
 
@@ -2028,6 +2071,44 @@ describe('resetForNewRecording (soft reset)', () => {
     });
     expect(getImportedRefPoints()).toHaveLength(0);
     expect(hideSessionSummary).toHaveBeenCalled();
+  });
+
+  // Why this test matters: the soft reset used to keep the WebXR session
+  // alive ("user returns to AR_READY"), but the setup screen it lands on
+  // requires pressing Enter AR again, and initAR() throws on a live session
+  // (re-entry guard, framework commit 8a4a2d2) — so the first Enter AR after
+  // a soft reset surfaced an error toast and needed a second press. The reset
+  // must end the session so the next Enter AR initializes cleanly. F3's
+  // session-end callback fires with requestedByApp: true here, which the
+  // system-session-end handler ignores — no double navigation or toast.
+  // See docs/2026-07-04-soft-reset-end-ar-session-plan.md (GpsPlusSlamJs_Docs).
+  it('ends the AR session so the next Enter AR starts clean', async () => {
+    const { endARSession } =
+      await import('gps-plus-slam-app-framework/ar/webxr-session');
+    vi.mocked(endARSession).mockClear();
+
+    await resetForNewRecording();
+
+    expect(endARSession).toHaveBeenCalledTimes(1);
+  });
+
+  // Why this test matters: ending the session is best-effort — a rejected
+  // XRSession.end() (already-ended session, teardown race) must not abort
+  // the rest of the soft reset, or the user would be stranded on a
+  // half-reset screen. The framework's endARSession() already guarantees
+  // clean module state on rejection; the app just logs and continues.
+  it('completes the soft reset even when endARSession rejects', async () => {
+    const { endARSession } =
+      await import('gps-plus-slam-app-framework/ar/webxr-session');
+    vi.mocked(endARSession).mockClear();
+    vi.mocked(endARSession).mockRejectedValueOnce(new Error('already ended'));
+    vi.mocked(resetUIForNewRecording).mockClear();
+
+    await expect(resetForNewRecording()).resolves.toBeUndefined();
+
+    expect(endARSession).toHaveBeenCalledTimes(1);
+    // The reset still reaches the UI stage after the failed session end.
+    expect(resetUIForNewRecording).toHaveBeenCalled();
   });
 });
 

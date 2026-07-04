@@ -96,14 +96,16 @@ test.describe('Settings Modal', () => {
 
     test('depth interval slider shows default value', async ({ page }) => {
       const valueDisplay = page.locator('#depth-interval-value');
-      await expect(valueDisplay).toHaveText('1.0s');
+      // 2026-06-30 occluder-tuning re-tune: depth sampling doubled to 0.5s.
+      await expect(valueDisplay).toHaveText('0.5s');
     });
 
     test('depth grid slider shows default value', async ({ page }) => {
       const valueDisplay = page.locator('#depth-grid-value');
-      // Default raised 3→16 with the occupancy-grid port (denser grid populates
-      // the AR-space occupancy grid fast enough for on-device verification).
-      await expect(valueDisplay).toHaveText('16×16');
+      // Default raised to 32 (max points/sample) in the 2026-07-01
+      // fast-reconstruction tuning — cells confirm fastest. The slider max was
+      // also raised to 64 for on-device experimentation with higher densities.
+      await expect(valueDisplay).toHaveText('32×32');
     });
 
     test('images interval slider shows default value', async ({ page }) => {
@@ -114,6 +116,19 @@ test.describe('Settings Modal', () => {
     test('images quality slider shows default value', async ({ page }) => {
       const valueDisplay = page.locator('#images-quality-value');
       await expect(valueDisplay).toHaveText('70%');
+    });
+
+    test('occluder mesh-style selector defaults to surface nets and offers all modes', async ({
+      page,
+    }) => {
+      // 2026-06-30 F2/F2b: switch the persistent-occluder mesher between blocky
+      // cubes, corner-fit cubes and surface nets. Default 'smooth' (Naive
+      // Surface Nets) since the 2026-07-01 default-on decision.
+      const select = page.locator('#occupancy-occluder-mesh-mode');
+      await expect(select).toHaveValue('smooth');
+      await expect(select.locator('option')).toHaveCount(3);
+      await select.selectOption('greedy');
+      await expect(select).toHaveValue('greedy');
     });
 
     test('unchecking depth disables depth sliders', async ({ page }) => {
