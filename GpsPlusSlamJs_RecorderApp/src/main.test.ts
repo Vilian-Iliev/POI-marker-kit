@@ -326,6 +326,7 @@ vi.mock('./ui/confirm-dialog', () => ({
 // Mock navigation for back-during-recording tests (Issue 5 — 2026-02-27)
 vi.mock('./ui/navigation', () => ({
   initNavigation: vi.fn(),
+  getCurrentScreen: vi.fn(() => 'setup'),
   enableBeforeUnloadWarning: vi.fn(),
   disableBeforeUnloadWarning: vi.fn(),
   pushScreenState: vi.fn(),
@@ -447,6 +448,7 @@ vi.mock('gps-plus-slam-app-framework/ar/webxr-session', () => ({
   setTrackingCallbacks: mockSetTrackingCallbacks,
   setTrackingRecoveredCallback: mockSetTrackingRecoveredCallback,
   setTrackingStore: vi.fn(),
+  setSessionEndCallback: vi.fn(),
   getScene: vi.fn().mockReturnValue(null),
   getCamera: vi.fn().mockReturnValue(null),
   getArWorldGroup: vi.fn().mockReturnValue(null),

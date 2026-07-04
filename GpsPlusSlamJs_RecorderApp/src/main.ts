@@ -73,6 +73,7 @@ import {
   setTrackingCallbacks,
   setTrackingRecoveredCallback,
   setTrackingStore,
+  setSessionEndCallback,
   getScene,
   getCamera,
   getArWorldGroup,
@@ -98,6 +99,7 @@ import {
   hasReadFolderPermission,
 } from './storage/external-file-storage';
 import { createRecordingSessionHandlers } from './recording/recording-session-handlers';
+import { createSystemSessionEndHandler } from './recording/system-session-end';
 import { createFolderManager } from './storage/folder-manager';
 
 import {
@@ -116,6 +118,7 @@ import {
   initNavigation,
   pushScreenState,
   replaceScreenState,
+  getCurrentScreen,
 } from './ui/navigation';
 import {
   createRecorderStore,
@@ -1202,6 +1205,25 @@ async function handleEnterAR(): Promise<void> {
     setTrackingRecoveredCallback(() => {
       updateArInfo('');
       log.info('AR tracking recovered (same coordinate frame)');
+    });
+
+    // F3 (2026-07-04): react to a SYSTEM-initiated session end (Android back
+    // gesture ends the XRSession directly — uncancelable). Mid-recording this
+    // auto-stops + saves and lands on the summary with a toast; in AR_READY it
+    // returns to setup. The framework clears this callback on every session
+    // end, so it is re-registered here on each Enter AR.
+    const systemSessionEndHandler = createSystemSessionEndHandler({
+      getCurrentScreen,
+      stopRecording: () => recordingSessionHandlers.handleStopRecording(),
+      replaceScreen: replaceScreenState,
+      showSetupUi: showSetupModal,
+      showToast: (message) => showToast(message),
+      showError,
+    });
+    // Fire-and-forget: the handler resolves its own errors (showError); the
+    // framework callback contract is synchronous.
+    setSessionEndCallback((info) => {
+      void systemSessionEndHandler(info);
     });
 
     const appContainer = document.getElementById('app');

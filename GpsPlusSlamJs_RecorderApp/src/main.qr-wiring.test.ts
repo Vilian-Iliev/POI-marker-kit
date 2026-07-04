@@ -76,6 +76,7 @@ vi.mock('gps-plus-slam-app-framework/ar/webxr-session', () => ({
   setTrackingCallbacks: vi.fn(),
   setTrackingRecoveredCallback: vi.fn(),
   setTrackingStore: vi.fn(),
+  setSessionEndCallback: vi.fn(),
   getScene: mockGetScene,
   getCamera: mockGetCamera,
   getArWorldGroup: mockGetArWorldGroup,
@@ -151,6 +152,7 @@ vi.mock('./ui/ref-point-picker', () => ({
 }));
 vi.mock('./ui/navigation', () => ({
   initNavigation: vi.fn(),
+  getCurrentScreen: vi.fn(() => 'setup'),
   enableBeforeUnloadWarning: vi.fn(),
   disableBeforeUnloadWarning: vi.fn(),
   pushScreenState: vi.fn(),
