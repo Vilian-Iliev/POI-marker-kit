@@ -19,12 +19,7 @@ import {
 import { startSession, endSession } from '../state/recorder-store';
 import type { RecorderStore } from '../state/recorder-store';
 import { wireStoreSubscribers } from 'gps-plus-slam-app-framework/state/store-subscribers';
-import { wireRefPointSubscribers } from '../state/ref-point-subscribers';
-import {
-  wireRefPointMapMarkers,
-  refPointEntriesToMarkerData,
-  type RefPointMapMarkerWirer,
-} from '../ui/ref-point-map-markers';
+import { refPointEntriesToMarkerData } from '../ui/ref-point-map-markers';
 import { selectRefPointEntries } from '../state/ref-points-slice';
 import type { RecordingOptions } from 'gps-plus-slam-app-framework/state/recording-options';
 import { formatTimestamp } from 'gps-plus-slam-app-framework/storage/file-system-utils';
@@ -224,14 +219,6 @@ export interface RecordingSessionHandlers {
   /** Set the current session name. */
   setCurrentSessionName(name: string): void;
 
-  /**
-   * Re-render the ref-point markers onto the live minimap. Called by main's
-   * handleToggleMap right after the overlay is lazily created, so the
-   * just-created map immediately shows the current refPoints state. Safe
-   * no-op when no recording session (and thus no wirer) is active.
-   */
-  refreshRefPointMapMarkers(): void;
-
   /** Record a successful image write (null-safe proxy to internal tracker). */
   recordWriteSuccess(): void;
   /** Record a failed image write (null-safe proxy to internal tracker). */
@@ -263,13 +250,6 @@ export function createRecordingSessionHandlers(
   let backDuringRecordingInProgress = false;
   let stopInProgress = false;
   let unsubscribeStore: (() => void) | null = null;
-  let unsubscribeRefPoints: (() => void) | null = null;
-  /**
-   * Store→minimap ref-point marker wirer (2026-07-05 live-map feedback):
-   * renders the refPoints state onto the lazily-created AR minimap through
-   * the SAME renderer the session-summary map uses.
-   */
-  let refPointMapMarkers: RefPointMapMarkerWirer | null = null;
   /** Off-thread blur/blackness analyzer worker for this recording (null when the
    *  quality gate is disabled). Owned here: created on start, disposed on stop. */
   let imageQualityClient: ImageQualityClient | null = null;
@@ -445,23 +425,10 @@ export function createRecordingSessionHandlers(
       mapOverlay: mapOverlayProxy,
       onNewGpsLatLng: deps.onNewGpsLatLng,
     });
-    unsubscribeRefPoints = wireRefPointSubscribers(store, refPointVisualizer);
-    // 2026-07-05 live-map feedback: the live minimap renders the refPoints
-    // state through the SAME shared renderer as the summary map. Late-binding
-    // getMap — the overlay is created lazily on the first #btn-map toggle
-    // (main's handleToggleMap then calls refreshRefPointMapMarkers()). The
-    // start time is read lazily from this session's metadata, so imported
-    // sidecar points (timestamp 0) render green and this-session captures
-    // red — the exact classification the summary map applies.
-    refPointMapMarkers?.unsubscribe();
-    refPointMapMarkers = wireRefPointMapMarkers(store, {
-      getMap: () => deps.getMapOverlay()?.getLeafletMap() ?? null,
-      getStartTime: () =>
-        store.getState().recording.sessionMetadata?.startTime ??
-        Number.MAX_SAFE_INTEGER,
-      // F5-A (2026-06-05): in-AR map markers are enlarged for readability.
-      dotSizePx: 20,
-    });
+    // NOTE: the ref-point VIEW subscribers (3D spheres + live-map markers)
+    // are no longer wired here. They are AR-scoped and follow store swaps
+    // via main's storeRef (ui/ref-point-view-wiring.ts, round-3 feedback
+    // 2026-07-05) — the setStore(store) call above triggers their re-wire.
 
     // Initialize failure trackers
     writeFailureTracker = createWriteFailureTracker({ onWarning: showError });
@@ -768,15 +735,6 @@ export function createRecordingSessionHandlers(
       unsubscribeStore();
       unsubscribeStore = null;
     }
-    if (unsubscribeRefPoints) {
-      unsubscribeRefPoints();
-      unsubscribeRefPoints = null;
-    }
-
-    if (refPointMapMarkers) {
-      refPointMapMarkers.unsubscribe();
-      refPointMapMarkers = null;
-    }
 
     // Collect tracker errors before resetting
     const errors: string[] = [];
@@ -943,15 +901,6 @@ export function createRecordingSessionHandlers(
       unsubscribeStore();
       unsubscribeStore = null;
     }
-    if (unsubscribeRefPoints) {
-      unsubscribeRefPoints();
-      unsubscribeRefPoints = null;
-    }
-
-    if (refPointMapMarkers) {
-      refPointMapMarkers.unsubscribe();
-      refPointMapMarkers = null;
-    }
 
     if (writeFailureTracker) {
       writeFailureTracker.reset();
@@ -985,7 +934,6 @@ export function createRecordingSessionHandlers(
     setCurrentSessionName: (name: string) => {
       currentSessionName = name;
     },
-    refreshRefPointMapMarkers: () => refPointMapMarkers?.refresh(),
     recordWriteSuccess: () => writeFailureTracker?.recordSuccess(),
     recordWriteFailure: (err: unknown) =>
       writeFailureTracker?.recordFailure(err),

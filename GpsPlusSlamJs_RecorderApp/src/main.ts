@@ -143,6 +143,11 @@ import {
 import type { LatLong } from 'gps-plus-slam-app-framework/core';
 import { odometryTrackingRestarted } from 'gps-plus-slam-app-framework/core';
 import { createStoreRef } from './state/store-ref';
+import {
+  wireRefPointViews,
+  type RefPointViewWiring,
+} from './ui/ref-point-view-wiring';
+import { refPointVisualizer } from './visualization/ref-point-visualizer';
 import { subscribeHudToTrackingQuality } from './ui/hud-tracking-quality-subscriber';
 import { gpsEventVisualizer } from 'gps-plus-slam-app-framework/visualization/gps-event-markers';
 import { LeafletMapOverlay } from 'gps-plus-slam-app-framework/visualization/leaflet-map-overlay';
@@ -318,6 +323,12 @@ let unsubscribeQrRecording: (() => void) | null = null;
 // setup → Enter AR again) and `resetMainState` can tear it down instead of
 // leaking an extra subscriber on every cycle.
 let unsubscribeTrackingQuality: (() => void) | null = null;
+
+// Ref-point view wiring (3D spheres + live-map markers) — AR-scoped and
+// store-swap-following via storeRef (round-3 feedback 2026-07-05). Wired at
+// Enter AR so the views react in AR_READY too (e.g. a folder import finishing
+// before the first recording); torn down on re-enter + in resetMainState.
+let refPointViews: RefPointViewWiring | null = null;
 
 // Replay mode handlers — encapsulates all replay state and event handlers
 // (Finding #7 decomposition: extracted from main.ts to replay/replay-handlers.ts)
@@ -672,6 +683,12 @@ export function resetMainState(): void {
   if (unsubscribeTrackingQuality) {
     unsubscribeTrackingQuality();
     unsubscribeTrackingQuality = null;
+  }
+  // Ref-point views (3D + map) — AR-scoped; detach the storeRef follower and
+  // remove any drawn map markers.
+  if (refPointViews) {
+    refPointViews.unsubscribe();
+    refPointViews = null;
   }
   // F3.5d — tear down frame-tile visualizer + drop cached frame blobs so
   // GPU textures and JPEG bytes don't outlive the AR session.
@@ -1363,6 +1380,17 @@ async function handleEnterAR(): Promise<void> {
       // resets the shared singleton's visibility on each store swap.
       gpsEventVisualizer.setVisible(viz.gpsAlignmentMarkers);
 
+      // Ref-point views (3D spheres + live-map markers) — AR-scoped and
+      // store-swap-following via storeRef (round-3 feedback 2026-07-05:
+      // previously session-scoped, so imports finishing before the first
+      // recording filled the store with no view subscribed). Dispose-first
+      // on re-enter, same leak-guard pattern as the layers below.
+      refPointViews?.unsubscribe();
+      refPointViews = wireRefPointViews(storeRef, {
+        visualizer: refPointVisualizer,
+        getMap: () => mapOverlay?.getLeafletMap() ?? null,
+      });
+
       // F3.5d — wire the frame-tile visualizer into the live AR scene so
       // captured frames appear as textured planes during recording, using
       // the same listener+visualizer stack as replay. Best-effort: failures
@@ -1771,7 +1799,7 @@ function handleToggleMap(): void {
     // before this map existed — render the current refPoints state onto the
     // just-created map (green prior / red captured, same renderer as the
     // summary map).
-    recordingSessionHandlers.refreshRefPointMapMarkers();
+    refPointViews?.refreshMapMarkers();
   }
 
   // Ensure map has GPS position before showing
