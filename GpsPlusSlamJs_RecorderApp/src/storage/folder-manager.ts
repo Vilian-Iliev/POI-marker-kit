@@ -30,10 +30,7 @@ import {
   writeRefPointDefinition,
   type RefPointDefinition,
 } from '../storage/ref-point-loader';
-import {
-  recoverRefPointDefinitionsFromZips,
-  indexRefPointDefinitionsFromFolder,
-} from '../storage/ref-point-recovery';
+import { indexRefPointDefinitionsFromFolder } from '../storage/ref-point-recovery';
 import {
   isH3Index,
   h3CellsMatch,
@@ -505,9 +502,12 @@ export function createFolderManager(deps: FolderManagerDeps): FolderManager {
   }
 
   /**
-   * Attempts to recover ref point definitions from ZIPs in the read folder.
-   * Returns recovered definitions (already persisted to OPFS), or [] on
-   * failure / no read folder.
+   * Lazy safety net: recover the CURRENT scenario's ref points from the read
+   * folder's ZIPs when its OPFS store is empty. Uses the same indexing pass
+   * as the eager folder-pick flow, but persists only the current scenario's
+   * bucket (strict routing, D4a — definitions of other scenarios must not
+   * bleed into this store; the eager pass covers them at pick time).
+   * Returns the re-loaded definitions, or [] on failure / no read folder.
    */
   async function tryRecoverRefPointsFromZips(
     opfsHandle: FileSystemDirectoryHandle
@@ -522,14 +522,17 @@ export function createFolderManager(deps: FolderManagerDeps): FolderManager {
     const readFolder = getReadFolderHandle();
     if (!readFolder) return [];
     try {
-      log.info('OPFS empty — recovering ref points from ZIPs...');
-      const recovery = await recoverRefPointDefinitionsFromZips(readFolder);
-      if (recovery.definitions.length > 0) {
-        for (const def of recovery.definitions) {
-          await writeRefPointDefinition(opfsHandle, def);
-        }
+      const scenarioName = deps.getStore().getState()
+        .scenario.currentScenarioName;
+      log.info(
+        `OPFS empty — recovering ref points from ZIPs for "${scenarioName}"...`
+      );
+      const result = await indexRefPointDefinitionsFromFolder(readFolder);
+      const bucket = result.definitionsByScenario.get(scenarioName) ?? [];
+      const written = await gapFillScenarioStore(opfsHandle, bucket);
+      if (written > 0) {
         log.info(
-          `Recovered ${recovery.definitions.length} ref points from ${recovery.zipFilesScanned} ZIPs`
+          `Recovered ${written} ref points from ${result.zipFilesScanned} ZIPs`
         );
         return await loadAllRefPoints(opfsHandle);
       }

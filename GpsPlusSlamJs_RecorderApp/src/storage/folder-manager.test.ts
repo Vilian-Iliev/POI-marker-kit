@@ -50,9 +50,6 @@ vi.mock('../storage/ref-point-loader', () => ({
 }));
 
 vi.mock('../storage/ref-point-recovery', () => ({
-  recoverRefPointDefinitionsFromZips: vi.fn(() =>
-    Promise.resolve({ definitions: [], zipFilesScanned: 0, errors: [] })
-  ),
   indexRefPointDefinitionsFromFolder: vi.fn(() =>
     Promise.resolve({
       definitionsByScenario: new Map(),
@@ -95,10 +92,7 @@ import {
   ensureScenarioDirectory,
   getScenarioDirectoryHandle,
 } from './scenario-storage';
-import {
-  recoverRefPointDefinitionsFromZips,
-  indexRefPointDefinitionsFromFolder,
-} from '../storage/ref-point-recovery';
+import { indexRefPointDefinitionsFromFolder } from '../storage/ref-point-recovery';
 import {
   loadAllRefPoints,
   writeRefPointDefinition,
@@ -924,15 +918,12 @@ describe('createFolderManager', () => {
       expect(result).toEqual({ refPointCount: 0, observationCount: 0 });
     });
 
-    it('should recover ref points from ZIPs when OPFS is empty and read folder available', async () => {
-      // Why: Problem 2 fix — when OPFS is cleared, ref points should be
-      // recovered from session ZIPs in the read folder, written to OPFS,
-      // then loaded normally. This is the core OPFS recovery flow.
-      const { loadAllRefPoints, writeRefPointDefinition } =
-        await import('../storage/ref-point-loader');
-      const { recoverRefPointDefinitionsFromZips } =
-        await import('../storage/ref-point-recovery');
-
+    it('should recover ONLY the current scenario bucket from ZIPs when OPFS is empty (strict routing, D4a)', async () => {
+      // Why: Problem 2 fix + D4a (2026-07-05): when OPFS is cleared, ref
+      // points are recovered from the read folder's ZIPs via the shared
+      // indexing pass — but only the CURRENT scenario's bucket is written.
+      // Definitions belonging to other scenarios must NOT bleed into this
+      // scenario's store (the eager folder-pick pass covers them).
       const recoveredDef = {
         id: 'h3-cell-a',
         name: 'Bench',
@@ -945,32 +936,44 @@ describe('createFolderManager', () => {
             gpsPoint: { latitude: 50.1, longitude: 8.1 },
           },
         ],
-      };
+      } as unknown as RefPointDefinition;
+      const foreignDef = {
+        id: 'h3-cell-z',
+        name: 'Other scenario point',
+        createdAt: 2000,
+        observations: [],
+      } as unknown as RefPointDefinition;
 
-      // First call: OPFS empty. Second call (after recovery writes): has data
+      // 1st call: OPFS-empty check. 2nd: gap-fill accepted-list. 3rd (after
+      // the write): re-load with data.
       vi.mocked(loadAllRefPoints)
         .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([recoveredDef] as never);
-      vi.mocked(recoverRefPointDefinitionsFromZips).mockResolvedValue({
-        definitions: [recoveredDef] as never,
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([recoveredDef]);
+      vi.mocked(indexRefPointDefinitionsFromFolder).mockResolvedValue({
+        definitionsByScenario: new Map([
+          ['Paris', [recoveredDef]],
+          ['Berlin', [foreignDef]],
+        ]),
         zipFilesScanned: 2,
         errors: [],
       });
       vi.mocked(getReadFolderHandle).mockReturnValue(mockFolderHandle);
 
       const { manager } = createFolderManagerWithDefaults();
+      manager.setCurrentScenarioName('Paris');
       const result = await manager.loadAndDisplayRefPoints(mockFolderHandle);
 
-      // Recovery should have been triggered
-      expect(recoverRefPointDefinitionsFromZips).toHaveBeenCalledWith(
+      // Recovery ran via the shared indexing pass over the read folder.
+      expect(indexRefPointDefinitionsFromFolder).toHaveBeenCalledWith(
         mockFolderHandle
       );
-      // Recovered definitions should have been written to OPFS
-      expect(writeRefPointDefinition).toHaveBeenCalledWith(
-        mockFolderHandle,
-        recoveredDef
-      );
-      // After recovery, ref points should be loaded and displayed
+      // Only the current scenario's bucket was written — no bleed.
+      const writtenIds = vi
+        .mocked(writeRefPointDefinition)
+        .mock.calls.map(([, def]) => def.id);
+      expect(writtenIds).toEqual(['h3-cell-a']);
+      // After recovery, ref points are loaded and displayed.
       expect(result.refPointCount).toBe(1);
     });
 
@@ -978,8 +981,6 @@ describe('createFolderManager', () => {
       // Why: Recovery should only run when OPFS is empty — unnecessary
       // ZIP scanning would slow down normal scenario changes.
       const { loadAllRefPoints } = await import('../storage/ref-point-loader');
-      const { recoverRefPointDefinitionsFromZips } =
-        await import('../storage/ref-point-recovery');
 
       vi.mocked(loadAllRefPoints).mockResolvedValue([
         { id: 'p1', name: 'existing', createdAt: 1, observations: [] },
@@ -989,14 +990,12 @@ describe('createFolderManager', () => {
       const { manager } = createFolderManagerWithDefaults();
       await manager.loadAndDisplayRefPoints(mockFolderHandle);
 
-      expect(recoverRefPointDefinitionsFromZips).not.toHaveBeenCalled();
+      expect(indexRefPointDefinitionsFromFolder).not.toHaveBeenCalled();
     });
 
     it('should NOT attempt recovery when no read folder is available', async () => {
       // Why: Without a read folder, there are no ZIPs to recover from.
       const { loadAllRefPoints } = await import('../storage/ref-point-loader');
-      const { recoverRefPointDefinitionsFromZips } =
-        await import('../storage/ref-point-recovery');
 
       vi.mocked(loadAllRefPoints).mockResolvedValue([]);
       vi.mocked(getReadFolderHandle).mockReturnValue(null);
@@ -1004,7 +1003,7 @@ describe('createFolderManager', () => {
       const { manager } = createFolderManagerWithDefaults();
       const result = await manager.loadAndDisplayRefPoints(mockFolderHandle);
 
-      expect(recoverRefPointDefinitionsFromZips).not.toHaveBeenCalled();
+      expect(indexRefPointDefinitionsFromFolder).not.toHaveBeenCalled();
       expect(result).toEqual({ refPointCount: 0, observationCount: 0 });
     });
 
@@ -1012,11 +1011,9 @@ describe('createFolderManager', () => {
       // Why: Recovery failures should not crash scenario selection —
       // user can still record, just without prior ref points.
       const { loadAllRefPoints } = await import('../storage/ref-point-loader');
-      const { recoverRefPointDefinitionsFromZips } =
-        await import('../storage/ref-point-recovery');
 
       vi.mocked(loadAllRefPoints).mockResolvedValue([]);
-      vi.mocked(recoverRefPointDefinitionsFromZips).mockRejectedValue(
+      vi.mocked(indexRefPointDefinitionsFromFolder).mockRejectedValue(
         new Error('ZIP read failure')
       );
       vi.mocked(getReadFolderHandle).mockReturnValue(mockFolderHandle);
@@ -1444,16 +1441,21 @@ describe('createFolderManager', () => {
         expect(indexRefPointDefinitionsFromFolder).toHaveBeenCalled()
       );
 
-      // Empty OPFS + read folder available would normally trigger recovery…
+      // Empty OPFS + read folder available would normally trigger the lazy
+      // recovery (which itself runs the indexer) — while the eager pass is
+      // live it must no-op, so the indexer has run exactly once (the pass).
       await manager.handleScenarioChange('X');
-      expect(recoverRefPointDefinitionsFromZips).not.toHaveBeenCalled();
+      expect(indexRefPointDefinitionsFromFolder).toHaveBeenCalledTimes(1);
 
       resolveIndex(indexResult([]));
       await openPromise;
 
-      // …and does again once the pass has settled.
+      // …and the lazy safety net works again once the pass has settled.
+      vi.mocked(indexRefPointDefinitionsFromFolder).mockResolvedValue(
+        indexResult([])
+      );
       await manager.handleScenarioChange('X');
-      expect(recoverRefPointDefinitionsFromZips).toHaveBeenCalledTimes(1);
+      expect(indexRefPointDefinitionsFromFolder).toHaveBeenCalledTimes(2);
     });
 
     it('reset() aborts an active pass', async () => {
