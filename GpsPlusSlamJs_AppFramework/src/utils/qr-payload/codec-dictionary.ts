@@ -24,7 +24,7 @@ const ESCAPE = 0x00;
 
 /**
  * Token table, version 0x01. Bytes 0x01–0x1F are reserved for tokens (31
- * slots; 22 used). Sorted longest-first at module load for greedy matching —
+ * slots; 23 used). Sorted longest-first at module load for greedy matching —
  * entry order here is only cosmetic, BUT the byte assignments are frozen
  * forever once a QR code is printed.
  */
@@ -51,6 +51,7 @@ const TOKEN_TABLE_V1: readonly (readonly [number, string])[] = [
   [0x14, '},{"lat":'],
   [0x15, '}]}'],
   [0x16, '"}'],
+  [0x17, '.zip'],
 ];
 
 const TOKENS_BY_LENGTH = [...TOKEN_TABLE_V1].sort(

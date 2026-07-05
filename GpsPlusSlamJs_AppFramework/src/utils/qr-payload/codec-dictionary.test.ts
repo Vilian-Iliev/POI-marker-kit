@@ -39,6 +39,20 @@ describe('dictionary codec (A4)', () => {
     expect((packed as Uint8Array).length).toBeLessThan(POINTER.length - 30);
   });
 
+  // Why this test matters: map/scene assets in this project are ZIPs (e.g.
+  // raw-GitHub …/MyMap123.zip), so '.zip' must be a one-byte token exactly
+  // like '.json' — added 2026-07-05 while the v1 table is still unprinted.
+  it("tokenises '.zip' and the refs/heads/main path segment to one byte each", async () => {
+    const url =
+      'https://raw.githubusercontent.com/cs-util-com/GeoTales/refs/heads/main/MyMap123.zip';
+    const encoded = await encodeDictionaryPayload(url);
+    const packed = decodeBase64Url(encoded);
+    expect(await decodeDictionaryPayload(encoded)).toBe(url);
+    // version + prefix(1) + 'cs-util-com/GeoTales'(20) + refs-main(1)
+    // + 'MyMap123'(8) + '.zip'(1) = 32 bytes.
+    expect(packed).toHaveLength(32);
+  });
+
   // Why this test matters: printed QR codes are immutable — the version
   // byte is the only thing letting the table evolve without breaking them.
   it('prepends dictionary version 0x01 and rejects unknown versions', async () => {

@@ -24,7 +24,7 @@ knowledge deflate lacks). Also exports the **A4+A2 chain** (dictionary →
 
 ## Invariants & assumptions
 
-- Wire: `[versionByte 0x01][body…]`. Token bytes 0x01–0x1F (22 of 31
+- Wire: `[versionByte 0x01][body…]`. Token bytes 0x01–0x1F (23 of 31
   assigned); 0x00 escapes a literal control byte so payload bytes < 0x20
   can never be misread as tokens.
 - **Printed QR codes are immutable**: the v1 byte↔string assignments are
