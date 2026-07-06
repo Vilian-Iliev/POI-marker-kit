@@ -1795,11 +1795,6 @@ function handleToggleMap(): void {
       headingUp: recordingOptions.visualization.headingUpMap,
     });
     log.info('Map overlay created lazily on first toggle');
-    // 2026-07-05 live-map feedback: the ref-point marker wirer was subscribed
-    // before this map existed — render the current refPoints state onto the
-    // just-created map (green prior / red captured, same renderer as the
-    // summary map).
-    refPointViews?.refreshMapMarkers();
   }
 
   // Ensure map has GPS position before showing
@@ -1811,6 +1806,15 @@ function handleToggleMap(): void {
   }
 
   mapOverlay.toggle();
+  if (mapOverlay.isVisible()) {
+    // 2026-07-06 round-4 live-map fix: refresh AFTER toggle() — the overlay
+    // creates its inner Leaflet map only inside show(), so a refresh before
+    // toggle() always ran against a null map and drew nothing (green prior /
+    // red captured, same renderer as the summary map). Re-run on every
+    // re-show too: phases without store events (e.g. AR_READY has no GPS
+    // watch) would otherwise never trigger the wirer's subscriber.
+    refPointViews?.refreshMapMarkers();
+  }
   log.info(`Map overlay ${mapOverlay.isVisible() ? 'shown' : 'hidden'}`);
 }
 
@@ -1820,6 +1824,14 @@ function handleMapZoomIn(): void {
 
 function handleMapZoomOut(): void {
   mapOverlay?.zoomOut();
+}
+
+/**
+ * Exported for testing purposes.
+ * Wraps handleToggleMap for the map-toggle wiring tests.
+ */
+export function handleToggleMapForTesting(): void {
+  handleToggleMap();
 }
 
 /**

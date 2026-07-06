@@ -21,8 +21,10 @@ renderer.
   `selectRefPointEntries`:
   - `getMap` is late-binding (the AR minimap is created lazily on the first
     map toggle); returns null/undefined until then. The map's creator calls
-    `refresh()` once it exists (recording: `refreshRefPointMapMarkers()` from
-    main's `handleToggleMap`; replay: `setMapOverlay`).
+    `refresh()` once it exists — and it must do so **after** the map became
+    visible: the overlay creates its inner Leaflet map only inside `show()`
+    (recording: `refreshMapMarkers()` after `toggle()` in main's
+    `handleToggleMap`, 2026-07-06 round-4 fix; replay: `setMapOverlay`).
   - `getStartTime` is read lazily (from `sessionMetadata.startTime`) — before
     a session starts everything classifies prior/green; the `startSession`
     dispatch re-renders with the real start so this-session captures turn
@@ -34,6 +36,13 @@ renderer.
 - **Diffed re-render:** the store fires on every GPS tick during a recording;
   the wirer re-renders only when the memoized `selectRefPointEntries`
   reference or the `getStartTime()` value changes.
+- **Null-map renders never record rendered state** (2026-07-06 round-4 fix):
+  a `render()` against a null `getMap()` resets the diff-guard state instead
+  of recording it. Recording it would "poison" the guard — the subscriber
+  would treat the state as already drawn and never render after the
+  lazily-created map appears. Corollary: while the map is closed, every store
+  event runs a cheap no-op `render()` (zero-layer removal + selector read +
+  null-map return).
 - Rendering is remove-then-redraw of this wirer's OWN layers only — the
   overlay's trajectory layers are untouched.
 - Pure app-side module: the framework's `leaflet-map-overlay` stays
@@ -65,7 +74,11 @@ wirer.unsubscribe();
 - [ref-point-map-markers.test.ts](ref-point-map-markers.test.ts) — mapping
   fallbacks, immediate render, diffed re-render (no redraw on GPS ticks),
   startTime-change reclassification (green→red), late map creation via
-  `refresh()`, `dotSizePx` forwarding, unsubscribe cleanup.
+  `refresh()`, poisoned-guard regression (null-map render must not record
+  rendered state; next store event after the map appears draws), `dotSizePx`
+  forwarding, unsubscribe cleanup.
+- `main.map-toggle-wiring.test.ts` — main's `handleToggleMap` refreshes AFTER
+  `mapOverlay.toggle()` made the map visible (first show and re-shows).
 - Wiring: `recording-session-handlers.test.ts` (late-binding getMap,
   startTime from store, refresh delegation, teardown/replacement),
   `replay-mode.test.ts` (replay wiring, setMapOverlay refresh, dispose).

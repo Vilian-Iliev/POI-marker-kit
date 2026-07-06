@@ -327,7 +327,12 @@ vi.mock('gps-plus-slam-app-framework/visualization/gps-event-markers', () => ({
   gpsEventVisualizer: mockGpsEventVisualizer,
 }));
 
-vi.mock('gps-plus-slam-app-framework/visualization/reference-points', () => ({
+// NOTE: the handlers import the visualizer singleton from the LOCAL module
+// (../visualization/ref-point-visualizer) — an earlier mock of the framework
+// path 'gps-plus-slam-app-framework/visualization/reference-points' was stale
+// and never intercepted, which went unnoticed while no test exercised the
+// zeroRef path (getCurrentScenarioHandle defaulted to null).
+vi.mock('../visualization/ref-point-visualizer', () => ({
   refPointVisualizer: mockRefPointVisualizer,
 }));
 
@@ -1836,5 +1841,97 @@ describe('AbsCompass HUD timer — factory-pattern isolation (PR #126)', () => {
       ([id]) => id === aHudIntervalId
     );
     expect(clearedAsTimer).toBe(false);
+  });
+});
+
+// ── A3 (2026-07-06 round-4): prior ref-point load decoupled from GPS ──────
+
+describe('loadPriorReferencePoints (via handleStartRecording) — A3 GPS decoupling', () => {
+  let handlers: RecordingSessionHandlers;
+  let deps: RecordingSessionDeps;
+  const scenarioHandle = {} as FileSystemDirectoryHandle;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The file-wide default is a null handle (skips the load entirely);
+    // these tests need a scenario so the load path actually runs.
+    mockGetCurrentScenarioHandle.mockReturnValue(scenarioHandle);
+    deps = createMockDeps({
+      loadAndDisplayRefPoints: vi
+        .fn()
+        .mockResolvedValue({ refPointCount: 2, observationCount: 5 }),
+    });
+    handlers = createRecordingSessionHandlers(deps);
+  });
+
+  afterEach(() => {
+    // clearAllMocks does NOT reset mockReturnValue — restore the file-wide
+    // default explicitly so the handle override cannot leak into other tests.
+    mockGetCurrentScenarioHandle.mockReturnValue(null);
+  });
+
+  it('dispatches imported entries into the store even when the zeroRef wait times out', async () => {
+    // Why this test matters: round-4 A3 — the 2D map needs only lat/lon from
+    // the store, so a GPS-starved start must not lose the locally-stored ref
+    // points. The default waitForZeroReference mock resolves null (timeout).
+    await handlers.handleStartRecording();
+
+    await vi.waitFor(() =>
+      expect(deps.loadAndDisplayRefPoints).toHaveBeenCalledWith(scenarioHandle)
+    );
+    // The error channel still fires — 3D/AR placement genuinely needs GPS…
+    await vi.waitFor(() =>
+      expect(mockShowError).toHaveBeenCalledWith(
+        'No GPS signal received. Move outdoors for better reception.'
+      )
+    );
+    // …but the status reflects BOTH facts: GPS missing AND the load succeeded
+    // (round-4 interview decision 6).
+    expect(mockUpdateStatus).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'GPS unavailable | 2 ref points (5 observations) loaded'
+      )
+    );
+  });
+
+  it('loads + dispatches BEFORE waiting for the zeroRef (map view must not wait for GPS)', async () => {
+    // Why this test matters: with the load ordered after the wait, the live
+    // map loses its data source for up to 30 s even though OPFS is local.
+    await handlers.handleStartRecording();
+
+    await vi.waitFor(() =>
+      expect(deps.loadAndDisplayRefPoints).toHaveBeenCalled()
+    );
+    const loadOrder = vi.mocked(deps.loadAndDisplayRefPoints).mock
+      .invocationCallOrder[0]!;
+    const waitOrder = vi.mocked(deps.waitForZeroReference).mock
+      .invocationCallOrder[0]!;
+    expect(loadOrder).toBeLessThan(waitOrder);
+  });
+
+  it('sets the zeroRef on the 3D visualizer and reports the loaded counts when GPS arrives', async () => {
+    // Why this test matters: pins the success path across the A3 reorder —
+    // the sphere placement still receives the zeroRef, and the status shows
+    // the same counts as before.
+    deps = createMockDeps({
+      loadAndDisplayRefPoints: vi
+        .fn()
+        .mockResolvedValue({ refPointCount: 2, observationCount: 5 }),
+      waitForZeroReference: vi.fn().mockResolvedValue({ lat: 50, lon: 8 }),
+    });
+    handlers = createRecordingSessionHandlers(deps);
+
+    await handlers.handleStartRecording();
+
+    await vi.waitFor(() =>
+      expect(mockRefPointVisualizer.setZeroRef).toHaveBeenCalledWith({
+        lat: 50,
+        lon: 8,
+      })
+    );
+    expect(mockUpdateStatus).toHaveBeenCalledWith(
+      expect.stringContaining('2 ref points (5 observations) loaded')
+    );
+    expect(mockShowError).not.toHaveBeenCalled();
   });
 });

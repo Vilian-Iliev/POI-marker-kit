@@ -107,10 +107,19 @@ export function wireRefPointMapMarkers(
     removeLayers();
     const entries = selectRefPointEntries(store.getState().refPoints);
     const startTime = options.getStartTime();
+    const map = options.getMap();
+    if (!map) {
+      // Record rendered state ONLY after an actual draw. Recording it against
+      // a null map "poisons" the diff guard: the subscriber would treat the
+      // state as already drawn and never render after the lazily-created map
+      // appears (2026-07-06 round-4 live-map bug). Reset instead, so the
+      // state stays "undrawn" and the next store event with a map draws it.
+      renderedEntries = null;
+      renderedStartTime = null;
+      return;
+    }
     renderedEntries = entries;
     renderedStartTime = startTime;
-    const map = options.getMap();
-    if (!map) return;
     layers = drawRefPointMarkers(
       map,
       refPointEntriesToMarkerData(entries),

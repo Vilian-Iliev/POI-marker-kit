@@ -329,6 +329,15 @@ export function createRecordingSessionHandlers(
     }
 
     try {
+      // A3 (2026-07-06 round-4): load + dispatch BEFORE the zeroRef wait.
+      // The entries live in local OPFS and the 2D map needs only lat/lon from
+      // the store; only the 3D sphere placement needs GPS (the visualizer
+      // stays zeroRef-gated internally). Ordering the load after the wait
+      // starved the live map for up to 30 s — or entirely on timeout.
+      const { refPointCount, observationCount } =
+        await deps.loadAndDisplayRefPoints(scenarioHandle);
+      const loadedSummary = `${refPointCount} ref points (${observationCount} observations) loaded`;
+
       updateStatus('Waiting for GPS signal...');
 
       const zeroRef = await deps.waitForZeroReference(30000);
@@ -338,18 +347,18 @@ export function createRecordingSessionHandlers(
         showError(
           'No GPS signal received. Move outdoors for better reception.'
         );
-        updateStatus(`Recording: ${currentSessionName} | GPS unavailable`);
+        // The status must reflect BOTH durable facts: GPS is missing (3D/AR
+        // placement is degraded) AND the local load succeeded (the map shows
+        // the points) — round-4 interview decision 6.
+        updateStatus(
+          `Recording: ${currentSessionName} | GPS unavailable | ${loadedSummary}`
+        );
         return;
       }
 
       refPointVisualizer.setZeroRef(zeroRef);
 
-      const { refPointCount, observationCount } =
-        await deps.loadAndDisplayRefPoints(scenarioHandle);
-
-      updateStatus(
-        `Recording: ${currentSessionName} | ${refPointCount} ref points (${observationCount} observations) loaded`
-      );
+      updateStatus(`Recording: ${currentSessionName} | ${loadedSummary}`);
     } catch (err) {
       log.error('Failed to load prior reference points:', err);
     }

@@ -20,7 +20,10 @@ appeared on the map or in 3D until the first recording.
     swap-survival mechanism).
   - `getMap` is late-binding (the minimap is created lazily on the first map
     toggle); main's `handleToggleMap` calls `refreshMapMarkers()` right after
-    creating it.
+    `mapOverlay.toggle()` whenever the map ends up visible — NOT at overlay
+    creation, because the inner Leaflet map exists only after `show()`
+    (2026-07-06 round-4 fix; re-shows refresh too, since store-event-free
+    phases like AR_READY never trigger the wirer's subscriber).
   - The map wirer's `getStartTime` reads `sessionMetadata.startTime` from the
     CURRENT store — before a session everything renders prior/green, a
     recording's captures render red (identical to the summary map). Marker
@@ -48,7 +51,7 @@ refPointViews = wireRefPointViews(storeRef, {
   visualizer: refPointVisualizer,
   getMap: () => mapOverlay?.getLeafletMap() ?? null,
 });
-// after lazily creating the minimap:
+// after mapOverlay.toggle() made the minimap visible:
 refPointViews.refreshMapMarkers();
 // on reset / AR end:
 refPointViews.unsubscribe();

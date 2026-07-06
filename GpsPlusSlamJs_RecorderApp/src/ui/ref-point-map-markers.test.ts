@@ -212,6 +212,52 @@ describe('wireRefPointMapMarkers', () => {
     expect(createdLayers).toHaveLength(1);
   });
 
+  it('renders on the next store event after the map appears, even when the last entries change happened while the map was null (poisoned-guard regression)', () => {
+    // Reproduces Bug 1 of the 2026-07-06 round-4 feedback: the imported
+    // entries were dispatched BEFORE the minimap existed, then
+    // handleToggleMap called refresh() against a still-null map. render()
+    // used to record renderedEntries/renderedStartTime before the null-map
+    // guard, so the subscriber's diff check treated the state as already
+    // drawn and the live map stayed empty for the whole recording.
+    let map: L.Map | null = null;
+    const fake = createFakeStore([entry('cell-a', 0)]);
+    const wirer = wireRefPointMapMarkers(fake.store, {
+      getMap: () => map,
+      getStartTime: () => 1000,
+    });
+    // The real flow: handleToggleMap refreshes before the map exists.
+    wirer.refresh();
+    expect(createdLayers).toHaveLength(0);
+
+    map = mapStub;
+    // A GPS tick: same memoized entries reference, same start time.
+    fake.touchUnrelated();
+
+    expect(createdLayers).toHaveLength(1);
+  });
+
+  it('does not record rendered state on null-map renders (repeated events stay cheap no-ops, then a single draw)', () => {
+    // Companion to the poisoned-guard regression: while the map is null the
+    // wirer must neither crash nor draw, and once the map exists exactly one
+    // store event must produce exactly one draw of the current entries.
+    let map: L.Map | null = null;
+    const fake = createFakeStore([entry('cell-a', 0)]);
+    wireRefPointMapMarkers(fake.store, {
+      getMap: () => map,
+      getStartTime: () => 1000,
+    });
+
+    fake.touchUnrelated();
+    fake.touchUnrelated();
+    fake.setEntries([entry('cell-a', 0), entry('cell-b', 2000)]);
+    expect(createdLayers).toHaveLength(0);
+
+    map = mapStub;
+    fake.touchUnrelated();
+
+    expect(createdLayers).toHaveLength(2);
+  });
+
   it('forwards dotSizePx to the shared renderer (F5-A AR readability)', () => {
     const { store } = createFakeStore([entry('cell-a', 0)]);
     wireRefPointMapMarkers(store, {
