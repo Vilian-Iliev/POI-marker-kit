@@ -132,8 +132,9 @@ jobs:
         # — is gone: the npm CLI is no longer involved anywhere in the
         # release path.
         #
-        # `prepublishOnly` (`build` + `verify:pack`) runs automatically
-        # inside `pnpm publish`.
+        # `prepublishOnly` (`build` + `verify:pack` +
+        # `verify:community-key-lifetime`) runs automatically inside
+        # `pnpm publish`.
         #
         # No NODE_AUTH_TOKEN: the id-token write permission above + the
         # publisher registration on npmjs.com authorize this publish.
