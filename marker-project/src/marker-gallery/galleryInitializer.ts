@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { galleryScene } from "../scene/scene";
 import { createBreathingOrb } from "../markers/styles/breathingOrb";
+import { createFuturisticMarker } from "../markers/styles/futuristicMarker";
+import { createLighthouse } from "../markers/styles/lighthouse";
 import { createOrbitingConstellation } from "../markers/styles/orbitingConstellation";
 import { createCrystallineSikeTower } from "../markers/styles/crystallineSpikeTower";
 import { createMarker as createPlumbob } from "../markers/styles/plumbobMarker";
@@ -37,42 +39,42 @@ export function initializeGallery() {
     {
       creator: createBreathingOrb,
       name: "Ripple Pulse",
-      position: new THREE.Vector3(-4, 0, 0),
+      position: new THREE.Vector3(0, 0, 0),
     },
     {
-      creator: createOrbitingConstellation,
+      creator: createFuturisticMarker,
       name: "Energy Vortex",
-      position: new THREE.Vector3(-2, 0, 0),
+      position: new THREE.Vector3(0, 0, 0),
     },
     {
-      creator: createCrystallineSikeTower,
+      creator: createLighthouse,
       name: "Crystalline Growth",
       position: new THREE.Vector3(0, 0, 0),
     },
     {
       creator: createPlumbob,
       name: "Plumbob",
-      position: new THREE.Vector3(2, 0, 0),
+      position: new THREE.Vector3(0, 0, 0),
     },
     {
       creator: createRibbonWave,
       name: "Ribbon Wave",
-      position: new THREE.Vector3(4, 0, 0),
+      position: new THREE.Vector3(0, 0, 0),
     },
     {
       creator: createCrystalFlower,
       name: "Crystal Flower",
-      position: new THREE.Vector3(6, 0, 0),
+      position: new THREE.Vector3(0, 0, 0),
     },
     {
       creator: createCompassGyro,
       name: "Compass Gyro",
-      position: new THREE.Vector3(8, 0, 0),
+      position: new THREE.Vector3(0, 0, 0),
     },
     {
       creator: createSignalPillar,
       name: "Signal Pillar",
-      position: new THREE.Vector3(10, 0, 0),
+      position: new THREE.Vector3(0, 0, 0),
     },
   ];
 
