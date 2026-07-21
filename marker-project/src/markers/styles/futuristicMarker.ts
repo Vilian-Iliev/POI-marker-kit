@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { PoiData, MarkerState } from "../markerStateMachine";
+import type { PoiData, MarkerState } from "../markerStateMachine.ts";
 
 /**
  * FUTURISTIC ROBOTIC SENTINEL
@@ -177,7 +177,7 @@ export function createFuturisticMarker(position: THREE.Vector3, _data: PoiData) 
       eyeRight.geometry.dispose();
       antenna.geometry.dispose();
       antennaTip.geometry.dispose();
-accent.geometry.dispose();
+      //  accent.geometry.dispose();
       coreMaterial.dispose();
       frameMaterial.dispose();
       glowMaterial.dispose();
