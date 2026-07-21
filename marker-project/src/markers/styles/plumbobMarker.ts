@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type PoiData, type MarkerState } from "../markerStateMachine";
+import type { PoiData, MarkerState } from "../markerStateMachine.ts";
 
 // SIMS-STYLE PLUMBBOB (life marker)
 // Green rhombus-based double pyramid that spins and bobs.

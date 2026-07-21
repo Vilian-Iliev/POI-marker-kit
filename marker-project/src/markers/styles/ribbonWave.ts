@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type PoiData, type MarkerState } from "../markerStateMachine";
+import type { PoiData, MarkerState } from "../markerStateMachine.ts";
 
 // RIBBON WAVE
 // A flowing ribbon constructed from many slim segments that form a waving band.

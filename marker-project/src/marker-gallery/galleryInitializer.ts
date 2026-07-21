@@ -3,9 +3,14 @@ import { galleryScene } from "../scene/scene";
 import { createBreathingOrb } from "../markers/styles/breathingOrb";
 import { createFuturisticMarker } from "../markers/styles/futuristicMarker";
 import { createLighthouse } from "../markers/styles/lighthouse";
+import { createMarker as createPlumbob } from "../markers/styles/plumbobMarker";
+import { createMarker as createRibbonWave } from "../markers/styles/ribbonWave";
+import { createMarker as createCrystalFlower } from "../markers/styles/crystalFlower";
+import { createMarker as createCompassGyro } from "../markers/styles/compassGyro";
+import { createMarker as createSignalPillar } from "../markers/styles/signalPillar";
 import { store } from "../markers/store";
 import { addMarker } from "../markers/markerStateMachine";
-import type { PoiData, MarkerData } from "../markers/markerStateMachine";
+import type { PoiData, MarkerData } from "../markers/markerStateMachine.ts";
 
 type MarkerCreatorFn = (position: THREE.Vector3, data: PoiData) => any;
 
@@ -44,22 +49,40 @@ export function initializeGallery() {
       name: "Crystalline Growth",
       position: new THREE.Vector3(0, 0, 0),
     },
+    {
+      creator: createPlumbob,
+      name: "Plumbob",
+      position: new THREE.Vector3(0, 0, 0),
+    },
+    {
+      creator: createRibbonWave,
+      name: "Ribbon Wave",
+      position: new THREE.Vector3(0, 0, 0),
+    },
+    {
+      creator: createCrystalFlower,
+      name: "Crystal Flower",
+      position: new THREE.Vector3(0, 0, 0),
+    },
+    {
+      creator: createCompassGyro,
+      name: "Compass Gyro",
+      position: new THREE.Vector3(0, 0, 0),
+    },
+    {
+      creator: createSignalPillar,
+      name: "Signal Pillar",
+      position: new THREE.Vector3(0, 0, 0),
+    },
   ];
 
   for (let i = 0; i < markerConfigs.length; i++) {
     const config = markerConfigs[i];
     const data: PoiData = { name: config.name, iconUrl: "" };
-
-    // Create the marker 3D object
     const marker3d = config.creator(config.position, data);
 
-    // Add to scene
     galleryScene.add(marker3d.mesh);
-
-    // Initially hide all markers except the first one
     marker3d.mesh.visible = i === 0;
-
-    // Create marker data for state management
     const markerData: MarkerData = {
       name: config.name,
       label: config.name,
@@ -70,15 +93,15 @@ export function initializeGallery() {
       object3d: marker3d.mesh,
     };
 
-    // Add to Redux store
     store.dispatch(addMarker(markerData));
-
-    // Create gallery marker wrapper
+    const storeIndex = store.getState().markerState.length - 1;
     const galleryMarker: GalleryMarker = {
       marker3d,
       data: markerData,
       update(dtSeconds: number) {
-        marker3d.update(dtSeconds, markerData.currentState);
+        const live = store.getState().markerState[storeIndex];
+        const stateToUse = live ? live.currentState : markerData.currentState;
+        marker3d.update(dtSeconds, stateToUse);
       },
       dispose() {
         marker3d.dispose();
@@ -90,18 +113,12 @@ export function initializeGallery() {
   }
 }
 
-/**
- * Update all gallery markers (call once per frame)
- */
 export function updateGallery(dtSeconds: number) {
   for (const marker of galleryMarkers) {
     marker.update(dtSeconds);
   }
 }
 
-/**
- * Clean up gallery resources
- */
 export function disposeGallery() {
   for (const marker of galleryMarkers) {
     marker.dispose();

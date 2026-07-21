@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type PoiData, type MarkerState } from "../markerStateMachine";
+import type { PoiData, MarkerState } from "../markerStateMachine.ts";
 
 // SIGNAL PILLAR
 // A tall translucent pillar emits small rising particles; reads as a beacon
@@ -97,7 +97,7 @@ export function createMarker(position: THREE.Vector3, data: PoiData) {
         const life = p.life;
         const prog = age / life;
         p.mesh.position.y = 0.3 + prog * 1.6;
-        p.mesh.material.opacity = Math.max(0, 1.0 - prog) * opacity;
+        //p.mesh.material.opacity = Math.max(0, 1.0 - prog) * opacity;
         p.mesh.scale.setScalar(0.6 + prog * 0.8);
         if (prog >= 1) {
           container.remove(p.mesh);

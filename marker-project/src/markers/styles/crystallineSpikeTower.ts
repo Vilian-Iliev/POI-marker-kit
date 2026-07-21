@@ -1,176 +1,93 @@
 import * as THREE from "three";
-import { type PoiData, type MarkerState } from "../markerStateMachine";
+import type { PoiData, MarkerState } from "../markerStateMachine.ts";
 
 /**
- * RED-STRIPED LIGHTHOUSE
+ * SIM MARKER
  *
- * A tall lighthouse with bold red and white bands, a dark lantern cage, and a
- * cone roof. The design is cleaned up, with no arm-like appendages and a
- * rotating light animation inside the lantern.
+ * Clean, iconic gem floating above a circular base—inspired by The Sims 4 UI.
+ * A plumbob-like diamond pulses with a vibrant neon glow, bobbing gently in 3D space.
+ * The design is immediately readable from any distance: bold color, simple geometry,
+ * unmistakably intentional. Horizontal GPS error feels like natural floating motion.
  */
 
-export function createLighthouse(position: THREE.Vector3, _data: PoiData) {
+export function createCrystallineSikeTower(position: THREE.Vector3, data: PoiData) {
   const container = new THREE.Object3D();
   container.position.copy(position);
 
-  const whiteMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    metalness: 0.12,
-    roughness: 0.28,
-    emissive: 0x111111,
-    emissiveIntensity: 0.05,
-    transparent: true,
-    opacity: 1,
-  });
+  // Bright neon colors (Sims-style palette)
+  const gemColor = 0xff1493; // Deep pink/magenta
+  const glowIntensity = 1.0;
 
-  const redMaterial = new THREE.MeshStandardMaterial({
-    color: 0xe33b2a,
-    metalness: 0.08,
-    roughness: 0.3,
-    emissive: 0x310d06,
-    emissiveIntensity: 0.05,
-    transparent: true,
-    opacity: 1,
+  // Create main gem/diamond shape (octahedron for classic gem look)
+  const gemGeometry = new THREE.OctahedronGeometry(0.6, 3);
+  const gemMaterial = new THREE.MeshStandardMaterial({
+    color: gemColor,
+    metalness: 0.4,
+    roughness: 0.1,
+    emissive: gemColor,
+    emissiveIntensity: glowIntensity,
   });
+  const gem = new THREE.Mesh(gemGeometry, gemMaterial);
+  gem.position.y = 0.8;
+  container.add(gem);
 
-  const darkMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2e2f38,
-    metalness: 0.6,
-    roughness: 0.25,
-    emissive: 0x081010,
-    emissiveIntensity: 0.08,
+  // Outer glow halo around gem
+  const haloGeometry = new THREE.IcosahedronGeometry(0.85, 2);
+  const haloMaterial = new THREE.MeshBasicMaterial({
+    color: gemColor,
     transparent: true,
-    opacity: 0.96,
+    opacity: 0.2,
   });
+  const halo = new THREE.Mesh(haloGeometry, haloMaterial);
+  halo.position.y = 0.8;
+  halo.scale.set(1.3, 1.3, 1.3);
+  container.add(halo);
 
-  const glassMaterial = new THREE.MeshPhysicalMaterial({
-    color: 0xf8f6f2,
-    emissive: 0xf8f6f2,
-    emissiveIntensity: 0.42,
-    roughness: 0.04,
-    metalness: 0.0,
-    transparent: true,
-    opacity: 0.22,
-    transmission: 0.85,
-    side: THREE.DoubleSide,
+  // Circular base platform (classic Sims location marker base)
+  const baseGeometry = new THREE.CylinderGeometry(1.2, 1.2, 0.15, 32);
+  const baseMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1a1a2e,
+    metalness: 0.3,
+    roughness: 0.2,
+    emissive: 0x0a0a1a,
+    emissiveIntensity: 0.3,
   });
-
-  const lightMaterial = new THREE.MeshBasicMaterial({
-    color: 0xfff1b5,
-    transparent: true,
-    opacity: 0.9,
-    blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
-  });
-
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.05, 0.28, 26), whiteMaterial);
-  base.position.y = -0.08;
+  const base = new THREE.Mesh(baseGeometry, baseMaterial);
+  base.position.y = -0.1;
   container.add(base);
 
-  const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.42, 2.5, 26), whiteMaterial);
-  tower.position.y = 1.35;
-  container.add(tower);
-
-  const stripes: THREE.Mesh[] = [];
-  const stripeHeights = [0.45, 0.95, 1.45, 1.95];
-  for (let i = 0; i < stripeHeights.length; i++) {
-    const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.44, 0.18, 26), i % 2 === 0 ? redMaterial : whiteMaterial.clone());
-    stripe.position.y = stripeHeights[i];
-    container.add(stripe);
-    stripes.push(stripe);
-  }
-
-  const lanternFloor = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.44, 0.08, 26), darkMaterial);
-  lanternFloor.position.y = 2.60;
-  container.add(lanternFloor);
-
-  const lanternGlass = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.28, 26, 1, true), glassMaterial);
-  lanternGlass.position.y = 2.75;
-  container.add(lanternGlass);
-
-  const lanternCage: THREE.Mesh[] = [];
-  for (let i = 0; i < 8; i++) {
-    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.04), darkMaterial.clone());
-    const angle = (Math.PI * 2 * i) / 8;
-    rib.position.set(Math.cos(angle) * 0.4, 2.75, Math.sin(angle) * 0.4);
-    rib.rotation.y = angle;
-    container.add(rib);
-    lanternCage.push(rib);
-  }
-
-  const roofBrim = new THREE.Mesh(new THREE.CylinderGeometry(0.92, 0.92, 0.08, 24), redMaterial.clone());
-  roofBrim.position.y = 3.25;
-  container.add(roofBrim);
-
-  const roof = new THREE.Mesh(new THREE.ConeGeometry(0.72, 0.46, 24), redMaterial);
-  roof.position.y = 3.55;
-  roof.rotation.y = Math.PI * 0.02;
-  container.add(roof);
-
-  const roofBand = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.08, 24), darkMaterial);
-  roofBand.position.y = 3.15;
-  container.add(roofBand);
-
-  const roofBase = new THREE.Mesh(new THREE.CylinderGeometry(0.56, 0.56, 0.1, 24), whiteMaterial);
-  roofBase.position.y = 3.35;
-  container.add(roofBase);
-
-  const roofTop = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 8), darkMaterial.clone());
-  roofTop.position.y = 3.83;
-  container.add(roofTop);
-
-  const beaconCore = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 12), lightMaterial);
-  beaconCore.position.y = 2.75;
-  container.add(beaconCore);
-
-  const lightConeMaterial = new THREE.MeshBasicMaterial({
-    color: 0xfff1b5,
-    transparent: true,
-    opacity: 0.14,
-    blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
-    depthWrite: false,
+  // Ring around base (subtle accent)
+  const ringGeometry = new THREE.TorusGeometry(1.15, 0.08, 16, 100);
+  const ringMaterial = new THREE.MeshStandardMaterial({
+    color: gemColor,
+    metalness: 0.6,
+    roughness: 0.05,
+    emissive: gemColor,
+    emissiveIntensity: 0.5,
   });
+  const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+  ring.position.y = 0.0;
+  ring.rotation.x = Math.PI * 0.1;
+  container.add(ring);
 
-  const lightPivot = new THREE.Object3D();
-  lightPivot.position.set(0, 2.75, 0);
-  container.add(lightPivot);
+  // Inner rotating ring (adds motion complexity)
+  const innerRingGeometry = new THREE.TorusGeometry(0.7, 0.06, 16, 100);
+  const innerRing = new THREE.Mesh(innerRingGeometry, ringMaterial.clone());
+  innerRing.position.y = 0.3;
+  innerRing.rotation.x = Math.PI * 0.4;
+  container.add(innerRing);
 
-  const lightConeGeometry = new THREE.BufferGeometry();
-  const lightConeVertices = new Float32Array([
-    0.0,
-    0.0,
-    0.0,
-    -0.48,
-    -0.16,
-    2.6,
-    0.48,
-    -0.16,
-    2.6,
-    0.48,
-    0.16,
-    2.6,
-    -0.48,
-    0.16,
-    2.6,
-  ]);
-  lightConeGeometry.setAttribute("position", new THREE.BufferAttribute(lightConeVertices, 3));
-  lightConeGeometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]);
-  lightConeGeometry.computeVertexNormals();
-
-  const lightCone = new THREE.Mesh(lightConeGeometry, lightConeMaterial);
-  lightCone.position.z = 0.05;
-  lightPivot.add(lightCone);
-
-  const lightRings: THREE.Mesh[] = [];
-  for (let i = 0; i < 3; i++) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.16 + i * 0.05, 0.02, 12, 48), lightMaterial.clone());
-    ring.position.y = 2.75;
-    ring.rotation.x = Math.PI * 0.5;
-    ring.material.opacity = 0.55 - i * 0.14;
-    container.add(ring);
-    lightRings.push(ring);
-  }
+  // Vertical light beam effect
+  const beamGeometry = new THREE.CylinderGeometry(0.3, 0.5, 2.5, 16);
+  const beamMaterial = new THREE.MeshBasicMaterial({
+    color: gemColor,
+    transparent: true,
+    opacity: 0.15,
+    side: THREE.DoubleSide,
+  });
+  const beam = new THREE.Mesh(beamGeometry, beamMaterial);
+  beam.position.y = 0.6;
+  container.add(beam);
 
   let elapsedTime = 0;
   let currentOpacity = 0;
@@ -181,74 +98,85 @@ export function createLighthouse(position: THREE.Vector3, _data: PoiData) {
     update(dtSeconds: number, state: MarkerState) {
       elapsedTime += dtSeconds;
 
-      let targetOpacity = 1;
+      // Fade in/out
+      let targetOpacity = 1.0;
       if (state === "hidden") {
         targetOpacity = 0;
+        currentOpacity = 0;
       } else if (state === "revealing") {
-        targetOpacity = 1;
+        targetOpacity = 1.0;
+        currentOpacity += dtSeconds * 1.25;
       } else if (state === "hiding") {
         targetOpacity = 0;
+        currentOpacity -= dtSeconds * 1.67;
       }
-      currentOpacity += (targetOpacity - currentOpacity) * Math.min(1, dtSeconds * 3.2);
       currentOpacity = Math.max(0, Math.min(1, currentOpacity));
 
-      const opacityFactor = Math.pow(currentOpacity, 0.92);
-      whiteMaterial.opacity = opacityFactor;
-      redMaterial.opacity = opacityFactor;
-      darkMaterial.opacity = opacityFactor;
-      glassMaterial.opacity = Math.max(0.18, opacityFactor * 0.32);
-      lightMaterial.opacity = opacityFactor * 0.9;
+      // Gem bob up and down (signature Sims floating motion)
+      const bobPhase = elapsedTime * 1.5;
+      const bobHeight = Math.sin(bobPhase) * 0.25;
+      gem.position.y = 0.8 + bobHeight;
+      halo.position.y = 0.8 + bobHeight;
+      innerRing.position.y = 0.3 + bobHeight;
+      beam.position.y = 0.6 + bobHeight;
 
-      const sway = Math.sin(elapsedTime * 0.16) * 0.015;
-      container.rotation.z = sway;
-      container.rotation.x = Math.cos(elapsedTime * 0.08) * 0.01;
+      // Gem rotation - steady spin
+      gem.rotation.x += dtSeconds * 0.8;
+      gem.rotation.y += dtSeconds * 1.2;
+      gem.rotation.z += dtSeconds * 0.5;
 
-      beaconCore.rotation.y += dtSeconds * 1.5;
-      const beaconPulse = 0.8 + Math.sin(elapsedTime * 4.2) * 0.14;
-      (beaconCore.material as THREE.MeshBasicMaterial).opacity = opacityFactor * beaconPulse;
+      // Halo rotation (opposite direction)
+      halo.rotation.z -= dtSeconds * 0.7;
 
-      for (let i = 0; i < lightRings.length; i++) {
-        lightRings[i].rotation.y = elapsedTime * (0.6 + i * 0.35);
-      }
+      // Base ring rotates
+      ring.rotation.z += dtSeconds * 1.5;
 
-      for (let i = 0; i < lanternCage.length; i++) {
-        lanternCage[i].position.y = 2.75 + Math.sin(elapsedTime * 1.2 + i) * 0.005;
-      }
+      // Inner ring rotates faster
+      innerRing.rotation.z -= dtSeconds * 2.0;
 
-      lightPivot.rotation.y = elapsedTime * 0.8;
-      lightConeMaterial.opacity = Math.max(0.04, opacityFactor * 0.18);
+      // Gem pulse brightness
+      const pulseBrightness = 0.6 + Math.sin(bobPhase * 2) * 0.4;
+      gemMaterial.emissiveIntensity = glowIntensity * pulseBrightness;
+      ringMaterial.emissiveIntensity = 0.5 * pulseBrightness;
 
+      // Apply opacity to all materials
+      gemMaterial.opacity = currentOpacity;
+      haloMaterial.opacity = currentOpacity * 0.2;
+      baseMaterial.opacity = currentOpacity;
+      ringMaterial.opacity = currentOpacity;
+      beamMaterial.opacity = currentOpacity * 0.15;
+
+      // Beam pulsing effect
+      beamMaterial.opacity = currentOpacity * (0.1 + Math.sin(elapsedTime * 3) * 0.08);
+
+      // Focus state: expand gem and increase glow
       if (state === "focused") {
-        container.scale.lerp(new THREE.Vector3(1.18, 1.18, 1.18), 0.08);
+        const focusScale = 1.3;
+        gem.scale.lerp(new THREE.Vector3(focusScale, focusScale, focusScale), 0.1);
+        halo.scale.lerp(new THREE.Vector3(focusScale * 1.3, focusScale * 1.3, focusScale * 1.3), 0.1);
+        gemMaterial.emissiveIntensity = Math.min(1.2, glowIntensity * pulseBrightness * 1.3);
       } else {
-        container.scale.lerp(new THREE.Vector3(1, 1, 1), 0.08);
+        gem.scale.lerp(new THREE.Vector3(1.0, 1.0, 1.0), 0.1);
+        halo.scale.lerp(new THREE.Vector3(1.3, 1.3, 1.3), 0.1);
       }
+
+      // Subtle container tilt (very minimal for Sims aesthetic)
+      container.rotation.z = Math.sin(elapsedTime * 0.3) * 0.03;
     },
 
     dispose() {
-      base.geometry.dispose();
-      tower.geometry.dispose();
-      whiteMaterial.dispose();
-      redMaterial.dispose();
-      darkMaterial.dispose();
-      glassMaterial.dispose();
-      lightMaterial.dispose();
-      for (const stripe of stripes) {
-        stripe.geometry.dispose();
-      }
-      lanternFloor.geometry.dispose();
-      lanternGlass.geometry.dispose();
-      roof.geometry.dispose();
-      beaconCore.geometry.dispose();
-      for (const rib of lanternCage) {
-        rib.geometry.dispose();
-        (rib.material as THREE.Material).dispose();
-      }
-      for (const ring of lightRings) {
-        ring.geometry.dispose();
-      }
-      lightCone.geometry.dispose();
-      lightConeMaterial.dispose();
+      gemGeometry.dispose();
+      gemMaterial.dispose();
+      haloGeometry.dispose();
+      haloMaterial.dispose();
+      baseGeometry.dispose();
+      baseMaterial.dispose();
+      ringGeometry.dispose();
+      ringMaterial.dispose();
+      innerRingGeometry.dispose();
+      innerRing.material.dispose();
+      beamGeometry.dispose();
+      beamMaterial.dispose();
     },
   };
 }

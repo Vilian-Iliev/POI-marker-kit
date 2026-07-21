@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type PoiData, type MarkerState } from "../markerStateMachine";
+import type { PoiData, MarkerState } from "../markerStateMachine.ts";
 
 // COMPASS GYRO
 // Circular rings with a floating needle. The needle slowly spins and pulses.
@@ -100,11 +100,11 @@ export function createMarker(position: THREE.Vector3, data: PoiData) {
       container.scale.lerp(new THREE.Vector3(target, target, target), 0.06);
     },
     dispose() {
-      (outer.geometry as THREE.Geometry).dispose();
+     // (outer.geometry as THREE.Geometry).dispose();
       (outer.material as THREE.Material).dispose();
-      (inner.geometry as THREE.Geometry).dispose();
+     // (inner.geometry as THREE.Geometry).dispose();
       (inner.material as THREE.Material).dispose();
-      (needle.geometry as THREE.Geometry).dispose();
+      //(needle.geometry as THREE.Geometry).dispose();
       (needle.material as THREE.Material).dispose();
       for (const c of cards) {
         c.geometry.dispose();

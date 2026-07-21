@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type PoiData, type MarkerState } from "../markerStateMachine";
+import type { PoiData, MarkerState } from "../markerStateMachine.ts";
 
 /**
  * RIPPLE PULSE
@@ -126,7 +126,7 @@ export function createBreathingOrb(position: THREE.Vector3, data: PoiData) {
           if (oldWave) {
             container.remove(oldWave.mesh);
             oldWave.mesh.geometry.dispose();
-            oldWave.mesh.material.dispose();
+       //     oldWave.mesh.material.dispose();
           }
         }
 
@@ -159,7 +159,7 @@ export function createBreathingOrb(position: THREE.Vector3, data: PoiData) {
         if (waveProgress >= 1.0) {
           container.remove(wave.mesh);
           wave.mesh.geometry.dispose();
-          wave.mesh.material.dispose();
+//        wave.mesh.material.dispose();
           waves.splice(i, 1);
           i--;
         }
@@ -191,7 +191,7 @@ export function createBreathingOrb(position: THREE.Vector3, data: PoiData) {
 
       for (const wave of waves) {
         wave.mesh.geometry.dispose();
-        wave.mesh.material.dispose();
+        //wave.mesh.material.dispose();
       }
       waves.length = 0;
     },

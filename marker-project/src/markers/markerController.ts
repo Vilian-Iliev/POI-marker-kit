@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { changeState, initialMarkerData, selectMarkerArray, type MarkerData, type MarkerState, type PoiData } from "./markerStateMachine.ts";
+import { changeState, initialMarkerData, selectMarkerArray } from "./markerStateMachine.ts";
+import type { MarkerData, MarkerState, PoiData } from "./markerStateMachine.ts";
 import {config} from "../config.ts";
 import {calculateDistance} from "../spatial/distance.ts";
 import { objectIsInView } from "../interaction/attention.ts";

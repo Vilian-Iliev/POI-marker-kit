@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type PoiData, type MarkerState } from "../markerStateMachine";
+import type { PoiData, MarkerState } from "../markerStateMachine.ts";
 
 // CRYSTAL FLOWER
 // Petals unfold from a core and gently rotate — looks delicate at distance,
