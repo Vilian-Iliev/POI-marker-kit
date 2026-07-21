@@ -13,13 +13,15 @@ import { createMarker as createSignalPillar } from "../markers/styles/signalPill
 import { store } from "../markers/store";
 import { addMarker, vector3ToPlain } from "../markers/markerStateMachine";
 import type { PoiData, MarkerData } from "../markers/markerStateMachine.ts";
+import { Marker } from "../markers/markerController";
 
 type MarkerCreatorFn = (position: THREE.Vector3, data: PoiData) => any;
 
 interface GalleryMarker {
+  controller: Marker;
   marker3d: any;
   data: MarkerData;
-  update(dtSeconds: number): void;
+  update(dtSeconds: number, camera: THREE.Camera): void;
   dispose(): void;
 }
 
@@ -83,7 +85,11 @@ export function initializeGallery() {
     const data: PoiData = { name: config.name, iconUrl: "" };
     const marker3d = config.creator(config.position, data);
 
+    // Create a Marker controller that manages camera-based state transitions
+    const markerController = new Marker(config.position, data);
+
     galleryScene.add(marker3d.mesh);
+    galleryScene.add(markerController.object3d);
     marker3d.mesh.visible = i === 0;
     const markerData: MarkerData = {
       name: config.name,
@@ -91,22 +97,31 @@ export function initializeGallery() {
       imageAdress: data.iconUrl || "",
       position: vector3ToPlain(config.position),
       anchorOffset: vector3ToPlain(new THREE.Vector3(0, 0, 0)),
-      currentState: "idle",
+      currentState: "hidden",
     };
 
     store.dispatch(addMarker(markerData));
     const storeIndex = store.getState().markerState.length - 1;
     const galleryMarker: GalleryMarker = {
+      controller: markerController,
       marker3d,
       data: markerData,
-      update(dtSeconds: number) {
+      update(dtSeconds: number, camera: THREE.Camera) {
+        // Let the Marker controller handle state transitions based on camera
+        markerController.update(dtSeconds, camera);
+
+        // Get the updated state from Redux store
         const live = store.getState().markerState[storeIndex];
         const stateToUse = live ? live.currentState : markerData.currentState;
+        console.log(`gallery marker ${storeIndex} state:`, stateToUse);
+        // Update the visual marker with the new state
         marker3d.update(dtSeconds, stateToUse);
       },
       dispose() {
         marker3d.dispose();
+        markerController.dispose();
         galleryScene.remove(marker3d.mesh);
+        galleryScene.remove(markerController.object3d);
       },
     };
 
@@ -114,9 +129,9 @@ export function initializeGallery() {
   }
 }
 
-export function updateGallery(dtSeconds: number) {
+export function updateGallery(dtSeconds: number, camera: THREE.Camera) {
   for (const marker of galleryMarkers) {
-    marker.update(dtSeconds);
+    marker.update(dtSeconds, camera);
   }
 }
 

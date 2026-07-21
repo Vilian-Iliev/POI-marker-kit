@@ -25,6 +25,8 @@ interface PoiMarker {
 export class Marker implements PoiMarker {
   object3d: THREE.Object3D;
   markerData: MarkerData;
+  private focusDwellAccumulator: number = 0;
+  private stateTimer: number = 0;
   constructor(position: THREE.Vector3, data: PoiData) {
     this.markerData = {
       name: data.name || "Unnamed",
@@ -61,46 +63,66 @@ export class Marker implements PoiMarker {
   update(dtSeconds: number, camera: THREE.Camera): void {
     var revealRange =
       calculateDistance(camera.position, this.object3d.position) <=
-      config.revealDistance; //placeholder for now
+      config.revealDistance;
     var hideRange =
       calculateDistance(camera.position, this.object3d.position) >
-      config.hideDistance; //placeholder for now
+      config.hideDistance;
+    // objectIsInView now checks both focusDistance and focusAngle from config
     var isFocused = objectIsInView(
       camera.position,
       this.object3d.position,
       config.focusAngle,
-    ); //placeholder for now
-    var isInFocusDistance =
-      calculateDistance(camera.position, this.object3d.position) <=
-      config.focusDistance; //placeholder for now
+    );
 
-    //const possibleStates: MarkerState[] = [];
     let index = selectMarkerArray(store.getState()).findIndex(
       (marker) => marker.name === this.markerData.name,
     );
 
-    if (this.markerData.currentState === "hidden") {
+    // Read current state from Redux store, not from local copy
+    const currentState =
+      store.getState().markerState[index]?.currentState || "hidden";
+
+    // Track time in current state
+    this.stateTimer += dtSeconds;
+
+    // Track focus dwell time
+    if (isFocused) {
+      this.focusDwellAccumulator += dtSeconds;
+    } else {
+      this.focusDwellAccumulator = 0;
+    }
+
+    if (currentState === "hidden") {
       if (revealRange)
         store.dispatch(changeState({ index: index, state: "revealing" }));
       else return;
-    } else if (this.markerData.currentState === "revealing")
-      store.dispatch(changeState({ index: index, state: "idle" }));
-    else if (this.markerData.currentState === "idle") {
-      if (
-        isFocused &&
-        dtSeconds >= config.focusDwellMs / 1000 &&
-        isInFocusDistance
-      )
+    } else if (currentState === "revealing") {
+      // Stay in revealing for ~1.0 second to let animation play
+      if (this.stateTimer >= 1.0) {
+        store.dispatch(changeState({ index: index, state: "idle" }));
+        this.stateTimer = 0;
+      }
+    } else if (currentState === "idle") {
+      if (isFocused && this.focusDwellAccumulator >= config.focusDwellMs / 1000)
         store.dispatch(changeState({ index: index, state: "focused" }));
       else if (hideRange)
         store.dispatch(changeState({ index: index, state: "hiding" }));
-    } else if (this.markerData.currentState === "focused") {
+    } else if (currentState === "focused") {
       if (!isFocused)
         store.dispatch(changeState({ index: index, state: "idle" }));
       else if (hideRange)
         store.dispatch(changeState({ index: index, state: "hiding" }));
-    } else if (this.markerData.currentState === "hiding") {
-      store.dispatch(changeState({ index: index, state: "hidden" }));
+    } else if (currentState === "hiding") {
+      // Stay in hiding for ~0.6 second to let animation play
+      if (this.stateTimer >= 0.6) {
+        store.dispatch(changeState({ index: index, state: "hidden" }));
+        this.stateTimer = 0;
+      }
+    }
+
+    // Reset state timer when state changes
+    if (store.getState().markerState[index]?.currentState !== currentState) {
+      this.stateTimer = 0;
     }
   }
 }

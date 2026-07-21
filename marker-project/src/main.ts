@@ -58,7 +58,7 @@ window.addEventListener("keydown", (event) => {
 function animate() {
   requestAnimationFrame(animate);
   const dtSeconds = 1 / 60; // Assume 60 FPS for frame delta time
-  updateGallery(dtSeconds);
+  updateGallery(dtSeconds, camera);
   threeRenderer.render(galleryScene, camera);
   controls.update();
 }
