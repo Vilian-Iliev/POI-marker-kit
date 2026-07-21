@@ -11,7 +11,7 @@ import { createMarker as createCrystalFlower } from "../markers/styles/crystalFl
 import { createMarker as createCompassGyro } from "../markers/styles/compassGyro";
 import { createMarker as createSignalPillar } from "../markers/styles/signalPillar";
 import { store } from "../markers/store";
-import { addMarker } from "../markers/markerStateMachine";
+import { addMarker, vector3ToPlain } from "../markers/markerStateMachine";
 import type { PoiData, MarkerData } from "../markers/markerStateMachine.ts";
 
 type MarkerCreatorFn = (position: THREE.Vector3, data: PoiData) => any;
@@ -89,10 +89,9 @@ export function initializeGallery() {
       name: config.name,
       label: config.name,
       imageAdress: data.iconUrl || "",
-      position: config.position,
-      anchorOffset: new THREE.Vector3(0, 0, 0),
+      position: vector3ToPlain(config.position),
+      anchorOffset: vector3ToPlain(new THREE.Vector3(0, 0, 0)),
       currentState: "idle",
-      object3d: marker3d.mesh,
     };
 
     store.dispatch(addMarker(markerData));
@@ -126,6 +125,24 @@ export function disposeGallery() {
     marker.dispose();
   }
   galleryMarkers.length = 0;
+}
+
+/**
+ * Switch visibility to a specific marker by index
+ */
+export function switchToMarker(index: number) {
+  if (index < 0 || index >= galleryMarkers.length) {
+    console.warn(`Invalid marker index: ${index}`);
+    return;
+  }
+
+  // Hide all markers
+  for (const marker of galleryMarkers) {
+    marker.marker3d.mesh.visible = false;
+  }
+
+  // Show the selected marker
+  galleryMarkers[index].marker3d.mesh.visible = true;
 }
 
 export { galleryMarkers };
