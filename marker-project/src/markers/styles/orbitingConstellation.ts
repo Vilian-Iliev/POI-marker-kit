@@ -2,96 +2,111 @@ import * as THREE from "three";
 import type { PoiData, MarkerState } from "../markerStateMachine.ts";
 
 /**
- * ENERGY VORTEX
+ * HIGH-RES GEOMETRIC BEACON
  *
- * A spinning toroid with satellite nodes that orbit around it, exchanging energy.
- * The toroid rotates hypnotically while satellites trace clean Lissajous-like paths,
- * creating a stable yet dynamic 3D structure. The motion is mathematically clear and
- * immediately reads as something organized and intentional, even from distance.
- * GPS error disappears into the complexity of the motion.
+ * A clean, tall beacon with faceted geometry, layered prisms, and sharp polygonal
+ * detail. It reads clearly from distance and feels distinctly modern.
  */
 
-export function createOrbitingConstellation(position: THREE.Vector3, data: PoiData) {
+export function createFuturisticMarker(position: THREE.Vector3, _data: PoiData) {
   const container = new THREE.Object3D();
   container.position.copy(position);
 
-  // Main toroid - the heart of the vortex
-  const toroidGeometry = new THREE.TorusGeometry(1.0, 0.3, 32, 200);
-  const toroidMaterial = new THREE.MeshPhongMaterial({
-    color: 0x00ffff,
-    emissive: 0x0099ff,
-    emissiveIntensity: 0.7,
-    shininess: 100,
-    wireframe: false,
+  const coreMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0xdcfeff,
+    emissive: 0x99fbff,
+    emissiveIntensity: 1.2,
+    roughness: 0.04,
+    metalness: 0.6,
+    transparent: true,
+    opacity: 0.96,
+    transmission: 0.8,
+    clearcoat: 0.4,
   });
-  const toroid = new THREE.Mesh(toroidGeometry, toroidMaterial);
-  toroid.rotation.x = Math.PI * 0.3;
-  container.add(toroid);
 
-  // Inner spinning ring
-  const innerRingGeometry = new THREE.TorusGeometry(0.6, 0.12, 16, 100);
-  const innerRingMaterial = new THREE.MeshPhongMaterial({
-    color: 0x00ffff,
-    emissive: 0x00ffff,
-    emissiveIntensity: 0.5,
+  const frameMaterial = new THREE.MeshStandardMaterial({
+    color: 0x15354f,
+    emissive: 0x1c5c80,
+    emissiveIntensity: 0.35,
+    roughness: 0.14,
+    metalness: 0.82,
+    transparent: true,
+    opacity: 0.94,
     side: THREE.DoubleSide,
   });
-  const innerRing = new THREE.Mesh(innerRingGeometry, innerRingMaterial);
-  innerRing.rotation.z = Math.PI * 0.5;
-  container.add(innerRing);
 
-  // Energy satellites - orbit the vortex in complex patterns
-  interface Satellite {
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x8affff,
+    transparent: true,
+    opacity: 0.78,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 0.88, 0.16, 18), frameMaterial);
+  base.position.y = -0.04;
+  container.add(base);
+
+  const core = new THREE.Mesh(new THREE.DodecahedronGeometry(0.26, 1), coreMaterial);
+  core.position.y = 0.72;
+  container.add(core);
+
+  const spine = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.05, 18), frameMaterial);
+  spine.position.y = 0.35;
+  container.add(spine);
+
+  const panels: THREE.Mesh[] = [];
+  for (let i = 0; i < 5; i++) {
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.92, 0.28), frameMaterial.clone());
+    const angle = (i / 5) * Math.PI * 2;
+    panel.position.set(Math.cos(angle) * 0.33, 0.4, Math.sin(angle) * 0.33);
+    panel.rotation.y = angle;
+    panel.position.y = 0.42;
+    container.add(panel);
+    panels.push(panel);
+  }
+
+  const glassPanels: THREE.Mesh[] = [];
+  for (let i = 0; i < 4; i++) {
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.5), glowMaterial.clone());
+    const angle = (Math.PI / 2) * i + Math.PI * 0.1;
+    glass.position.set(Math.cos(angle) * 0.32, 0.92, Math.sin(angle) * 0.32);
+    glass.rotation.y = -angle;
+    glass.rotation.x = Math.PI * 0.04;
+    container.add(glass);
+    glassPanels.push(glass);
+  }
+
+  const shardMaterial = new THREE.MeshStandardMaterial({
+    color: 0x97fbff,
+    emissive: 0x97fbff,
+    emissiveIntensity: 1.0,
+    roughness: 0.08,
+    metalness: 0.55,
+    transparent: true,
+    opacity: 0.95,
+  });
+
+  interface Shard {
     mesh: THREE.Mesh;
-    phase1: number; // Primary orbit angle
-    phase2: number; // Secondary modulation
-    scale: number;
+    phase: number;
+    radius: number;
   }
 
-  const satellites: Satellite[] = [];
-  const satelliteCount = 6;
-
-  for (let i = 0; i < satelliteCount; i++) {
-    // Vary satellite size
-    const scale = 0.3 + (i % 2) * 0.15;
-    const geometry = new THREE.OctahedronGeometry(scale, 2);
-    const material = new THREE.MeshPhongMaterial({
-      color: 0x00ff99,
-      emissive: 0x00ff99,
-      emissiveIntensity: 0.8,
-      shininess: 120,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    container.add(mesh);
-
-    satellites.push({
-      mesh,
-      phase1: (i / satelliteCount) * Math.PI * 2,
-      phase2: (i / satelliteCount) * Math.PI,
-      scale,
-    });
+  const shards: Shard[] = [];
+  const shardCount = 7;
+  for (let i = 0; i < shardCount; i++) {
+    const shard = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.2, 10), shardMaterial.clone());
+    const phase = (i / shardCount) * Math.PI * 2;
+    shard.position.set(Math.cos(phase) * 0.85, 0.62, Math.sin(phase) * 0.85);
+    shard.rotation.set(Math.PI * 0.2, phase, 0);
+    container.add(shard);
+    shards.push({ mesh: shard, phase, radius: 0.85 });
   }
 
-  // Swirling energy tendrils (tori at different scales/angles)
-  const tendrilGeometries = [
-    new THREE.TorusGeometry(1.3, 0.08, 12, 100),
-    new THREE.TorusGeometry(1.6, 0.06, 12, 100),
-  ];
-  const tendrils: THREE.Mesh[] = [];
-
-  for (let i = 0; i < tendrilGeometries.length; i++) {
-    const material = new THREE.MeshPhongMaterial({
-      color: 0x0088ff,
-      emissive: 0x0088ff,
-      emissiveIntensity: 0.4,
-      side: THREE.DoubleSide,
-      transparent: true,
-    });
-    const mesh = new THREE.Mesh(tendrilGeometries[i], material);
-    mesh.rotation.x = (i * Math.PI) / 2.5;
-    container.add(mesh);
-    tendrils.push(mesh);
-  }
+  const accent = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.16, 18), glowMaterial.clone());
+  accent.position.y = 1.12;
+  container.add(accent);
 
   let elapsedTime = 0;
   let currentOpacity = 0;
@@ -102,90 +117,79 @@ export function createOrbitingConstellation(position: THREE.Vector3, data: PoiDa
     update(dtSeconds: number, state: MarkerState) {
       elapsedTime += dtSeconds;
 
-      // Fade control
-      let targetOpacity = 1.0;
+      let targetOpacity = 1;
       if (state === "hidden") {
         targetOpacity = 0;
-        currentOpacity = 0;
       } else if (state === "revealing") {
-        targetOpacity = 1.0;
-        currentOpacity += dtSeconds * 1.25;
+        targetOpacity = 1;
       } else if (state === "hiding") {
         targetOpacity = 0;
-        currentOpacity -= dtSeconds * 1.67;
       }
+      currentOpacity += (targetOpacity - currentOpacity) * Math.min(1, dtSeconds * 3.2);
       currentOpacity = Math.max(0, Math.min(1, currentOpacity));
 
-      toroidMaterial.opacity = currentOpacity;
-      innerRingMaterial.opacity = currentOpacity * 0.8;
+      const opacityFactor = Math.pow(currentOpacity, 0.94);
+      coreMaterial.opacity = opacityFactor * 0.96;
+      frameMaterial.opacity = opacityFactor * 0.93;
+      glowMaterial.opacity = opacityFactor * 0.8;
+      shardMaterial.opacity = opacityFactor * 0.95;
+      accent.material.opacity = opacityFactor * 0.72;
 
-      for (const tendril of tendrils) {
-        (tendril.material as THREE.MeshPhongMaterial).opacity =
-          currentOpacity * 0.4;
+      const tilt = Math.sin(elapsedTime * 0.12) * 0.022;
+      container.rotation.z = tilt;
+
+      core.rotation.y += dtSeconds * 0.85;
+      core.rotation.x += dtSeconds * 0.5;
+
+      for (let i = 0; i < panels.length; i++) {
+        const panel = panels[i];
+        const phase = elapsedTime * 0.8 + i * 0.9;
+        panel.position.y = 0.42 + Math.sin(phase) * 0.025;
+        panel.rotation.z = Math.PI * 0.08 + Math.sin(phase * 1.3) * 0.015;
       }
 
-      // Main toroid spins fast
-      toroid.rotation.z += dtSeconds * 2.0;
-      toroid.rotation.x = Math.PI * 0.3 + Math.sin(elapsedTime * 0.4) * 0.2;
-
-      // Inner ring spins opposite direction
-      innerRing.rotation.x += dtSeconds * 1.5;
-
-      // Update satellites with Lissajous-like orbits
-      for (const sat of satellites) {
-        const time1 = elapsedTime * 1.3 + sat.phase1;
-        const time2 = elapsedTime * 0.8 + sat.phase2;
-
-        // Complex orbital path
-        const x = Math.cos(time1) * 1.5 + Math.sin(time2 * 0.5) * 0.4;
-        const y = Math.sin(time1 * 1.2) * 1.2 + Math.cos(time2 * 0.3) * 0.3;
-        const z = Math.sin(time1 * 0.7) * 1.0;
-
-        sat.mesh.position.set(x, y, z);
-
-        // Satellites pulse in size
-        const pulse = 0.8 + Math.sin(time1 * 2) * 0.2;
-        sat.mesh.scale.set(pulse, pulse, pulse);
-
-        // Self-rotation
-        sat.mesh.rotation.x += dtSeconds * 3.0;
-        sat.mesh.rotation.y += dtSeconds * 2.5;
-        sat.mesh.rotation.z += dtSeconds * 1.8;
-
-        // Opacity based on position
-        const distFromCenter = Math.sqrt(x * x + y * y + z * z);
-        const satOpacity = currentOpacity * (0.6 + Math.sin(elapsedTime * 1.5) * 0.4);
-        (sat.mesh.material as THREE.MeshPhongMaterial).opacity = satOpacity;
+      for (let i = 0; i < glassPanels.length; i++) {
+        const glass = glassPanels[i];
+        const phase = elapsedTime * 1.25 + i;
+        glass.position.y = 0.92 + Math.sin(phase) * 0.022;
+        glass.rotation.z = Math.sin(phase * 0.9) * 0.06;
       }
 
-      // Tendrils swirl
-      tendrils[0].rotation.y += dtSeconds * 1.2;
-      tendrils[1].rotation.z += dtSeconds * 0.9;
+      for (const shard of shards) {
+        const time = elapsedTime * 1.15 + shard.phase;
+        const radius = shard.radius + Math.sin(time * 0.7) * 0.11;
+        shard.mesh.position.x = Math.cos(time) * radius;
+        shard.mesh.position.z = Math.sin(time) * radius;
+        shard.mesh.position.y = 0.62 + Math.sin(time * 1.35) * 0.085;
+        shard.mesh.rotation.y += dtSeconds * 1.6;
+      }
 
-      // Container sways slightly
-      container.rotation.x = Math.sin(elapsedTime * 0.25) * 0.08;
-      container.rotation.z = Math.cos(elapsedTime * 0.2) * 0.12;
+      accent.rotation.y += dtSeconds * 1.4;
 
-      // Focus expansion
-      const focusScale = state === "focused" ? 1.4 : 1.0;
-      container.scale.lerp(new THREE.Vector3(focusScale, focusScale, focusScale), 0.1);
+      if (state === "focused") {
+        container.scale.lerp(new THREE.Vector3(1.22, 1.22, 1.22), 0.08);
+      } else {
+        container.scale.lerp(new THREE.Vector3(1, 1, 1), 0.08);
+      }
     },
 
     dispose() {
-      toroidGeometry.dispose();
-      toroidMaterial.dispose();
-      innerRingGeometry.dispose();
-      innerRingMaterial.dispose();
-
-      for (const sat of satellites) {
-        sat.mesh.geometry.dispose();
-        (sat.mesh.material as THREE.MeshPhongMaterial).dispose();
+      base.geometry.dispose();
+      spine.geometry.dispose();
+      core.geometry.dispose();
+      coreMaterial.dispose();
+      frameMaterial.dispose();
+      glowMaterial.dispose();
+      shardMaterial.dispose();
+      accent.geometry.dispose();
+      for (const panel of panels) {
+        panel.geometry.dispose();
       }
-
-      for (let i = 0; i < tendrilGeometries.length; i++) {
-        tendrilGeometries[i].dispose();
-        tendrils[i].geometry.dispose();
-        (tendrils[i].material as THREE.MeshPhongMaterial).dispose();
+      for (const glass of glassPanels) {
+        glass.geometry.dispose();
+      }
+      for (const shard of shards) {
+        shard.mesh.geometry.dispose();
       }
     },
   };

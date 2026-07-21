@@ -3,6 +3,8 @@ import { galleryScene } from "../scene/scene";
 import { createBreathingOrb } from "../markers/styles/breathingOrb";
 import { createFuturisticMarker } from "../markers/styles/futuristicMarker";
 import { createLighthouse } from "../markers/styles/lighthouse";
+import { createOrbitingConstellation } from "../markers/styles/orbitingConstellation";
+import { createCrystallineSikeTower } from "../markers/styles/crystallineSpikeTower";
 import { createMarker as createPlumbob } from "../markers/styles/plumbobMarker";
 import { createMarker as createRibbonWave } from "../markers/styles/ribbonWave";
 import { createMarker as createCrystalFlower } from "../markers/styles/crystalFlower";
